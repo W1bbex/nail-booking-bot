@@ -1,0 +1,105 @@
+{
+  "salon": {
+    "name": "Nail Atelier",
+    "tagline": "Студия эстетического маникюра и ухода",
+    "address": "г. Москва, ул. Большая Дмитровка, д. 12, стр. 1, этаж 3",
+    "phone": "+7 (999) 000-11-22",
+    "working_hours": "Ежедневно с 09:00 до 22:00",
+    "currency": "₽",
+    "description": "Флагманская студия ногтевого сервиса премиум-класса",
+    "contact_telegram": "@atelier_support"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "public_url": "https://example.com",
+    "dev_mode": false
+  },
+  "booking": {
+    "slot_step_minutes": 30,
+    "work_start_hour": 10,
+    "work_end_hour": 21,
+    "horizon_days": 14,
+    "allow_client_cancel_hours": 2
+  },
+  "admin_telegram_ids": [],
+  "initial_masters": [
+    {
+      "id": 1,
+      "full_name": "Анна Смирнова",
+      "specialization": "Топ-мастер, моделирование и арт-дизайн",
+      "experience_years": 5,
+      "is_active": true
+    },
+    {
+      "id": 2,
+      "full_name": "Кристина Романова",
+      "specialization": "Мастер ногтевого сервиса, идеальное выравнивание",
+      "experience_years": 3,
+      "is_active": true
+    },
+    {
+      "id": 3,
+      "full_name": "Елена Васильева",
+      "specialization": "Мастер эстетики, SMART-педикюр и эко-маникюр",
+      "experience_years": 4,
+      "is_active": true
+    }
+  ],
+  "initial_services": [
+    {
+      "id": 1,
+      "category": "Комплексы",
+      "name": "Комплекс: Снятие + Маникюр + Гель-лак",
+      "description": "Аппаратный/комбинированный маникюр, снятие старого покрытия, выравнивание базой и стойкое однотонное покрытие",
+      "duration_minutes": 90,
+      "price": 2400.0,
+      "is_active": true
+    },
+    {
+      "id": 2,
+      "category": "Маникюр",
+      "name": "Классический гигиенический маникюр",
+      "description": "Обработка кутикулы, придание аккуратной формы свободному краю, полировка маслом и питательный крем",
+      "duration_minutes": 45,
+      "price": 1300.0,
+      "is_active": true
+    },
+    {
+      "id": 3,
+      "category": "Маникюр",
+      "name": "Японский эко-маникюр Masura",
+      "description": "Глубокое восстановление и натуральный глянец ногтевой пластины минеральной пастой и пчелиным воском",
+      "duration_minutes": 60,
+      "price": 1900.0,
+      "is_active": true
+    },
+    {
+      "id": 4,
+      "category": "Моделирование",
+      "name": "Наращивание ногтей (гель / полигель)",
+      "description": "Моделирование длины и правильной архитектуры ногтей на нижние формы с однотонным покрытием",
+      "duration_minutes": 150,
+      "price": 3800.0,
+      "is_active": true
+    },
+    {
+      "id": 5,
+      "category": "Педикюр",
+      "name": "SMART-педикюр с покрытием гель-лак",
+      "description": "Аппаратная обработка стоп смарт-дисками с молекулярным маслом, обработка пальчиков и покрытие",
+      "duration_minutes": 90,
+      "price": 3100.0,
+      "is_active": true
+    },
+    {
+      "id": 6,
+      "category": "Дизайн",
+      "name": "Экспресс-дизайн (френч / градиент / втирка)",
+      "description": "Изящный акцент на всех ногтях: французский маникюр, омбре или жемчужная втирка",
+      "duration_minutes": 30,
+      "price": 600.0,
+      "is_active": true
+    }
+  ]
+}
