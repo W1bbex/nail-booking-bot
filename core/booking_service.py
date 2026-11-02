@@ -288,11 +288,23 @@ async def create_booking(
         ):
             raise ValueError("Выбранное время выходит за рамки рабочего графика студии")
 
-        # Check past date/time
+        # Check slot step alignment (e.g. 30 min) and seconds
+        slot_step = int(settings.booking.get("slot_step_minutes", 30))
+        if start_time.minute % slot_step != 0 or start_time.second != 0:
+            raise ValueError(f"Время записи должно быть кратно шагу слота ({slot_step} мин)")
+
+        # Check past date/time and booking horizon limit
         now_moscow = get_moscow_now()
         slot_dt = datetime.combine(booking_date, start_time)
         if booking_date < now_moscow.date() or (booking_date == now_moscow.date() and slot_dt < now_moscow):
             raise ValueError("Нельзя записаться на прошедшее время")
+
+        horizon_days = int(settings.booking.get("horizon_days", 14))
+        max_booking_date = now_moscow.date() + timedelta(days=horizon_days)
+        if booking_date > max_booking_date:
+            raise ValueError(
+                f"Запись доступна максимум на {horizon_days} дней вперед (до {max_booking_date.strftime('%d.%m.%Y')})"
+            )
 
         # Strict check for conflicting active bookings (double booking guard)
         conflict_stmt = select(Booking).where(
@@ -353,6 +365,7 @@ async def create_booking(
             booking_date=booking_date,
             start_time=start_time,
             end_time=end_time,
+            price=round(float(service.price), 2),
             status="pending",
             is_any_master=is_any_master,
             assignment_deadline=calculate_assignment_deadline(booking_date) if is_any_master else None,

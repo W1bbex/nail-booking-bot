@@ -12,7 +12,7 @@
   "server": {
     "host": "127.0.0.1",
     "port": 8080,
-    "public_url": "https://example.com",
+    "public_url": "https://w1bbex.ru/demo/nails-atelier",
     "dev_mode": false
   },
   "booking": {

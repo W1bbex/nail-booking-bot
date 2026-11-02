@@ -70,10 +70,16 @@ async def get_admin_schedule(
     )
     bookings = res_b.scalars().all()
 
-    # Calculate rich statistics
-    revenue = sum(b.service.price for b in bookings if b.service and b.status in ("confirmed", "completed"))
+    # Calculate rich statistics using snapshotted booking price
+    revenue = sum(
+        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
+        for b in bookings
+        if b.status in ("confirmed", "completed")
+    )
     expected_revenue = sum(
-        b.service.price for b in bookings if b.service and b.status in ("confirmed", "completed", "pending")
+        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
+        for b in bookings
+        if b.status in ("confirmed", "completed", "pending")
     )
     total_count = len(bookings)
     pending_count = sum(1 for b in bookings if b.status == "pending")
@@ -113,7 +119,7 @@ async def get_admin_schedule(
                 "client_phone": b.client_phone,
                 "client_telegram_id": b.client_user.telegram_id if b.client_user else None,
                 "service_name": b.service.name if b.service else "",
-                "service_price": b.service.price if b.service else 0.0,
+                "service_price": b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0),
                 "master_id": b.master_id,
                 "master_name": b.master.full_name if b.master else "",
                 "comment": b.comment,
@@ -164,7 +170,7 @@ async def list_admin_bookings(
             "master_id": b.master_id,
             "master_name": b.master.full_name if b.master else "",
             "service_name": b.service.name if b.service else "",
-            "service_price": b.service.price if b.service else 0.0,
+            "service_price": b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0),
             "comment": b.comment,
             "created_at": b.created_at.isoformat() if b.created_at else None,
         }

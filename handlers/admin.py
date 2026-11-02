@@ -1329,3 +1329,32 @@ async def cb_admin_complete(call: CallbackQuery) -> None:
             await call.answer("Визит завершён и оплачен")
         except Exception as e:
             await call.answer(f"Ошибка: {e}", show_alert=True)
+
+
+@admin_router.message(Command("backup"))
+async def cmd_admin_backup(message: Message) -> None:
+    if not check_admin(message.from_user.id):
+        return
+
+    from core.backup import backup_sqlite_database, get_backup_stats
+
+    status_msg = await message.answer("🔄 Выполняю безопасный онлайн-снапшот базы данных SQLite...")
+    backup_file = backup_sqlite_database()
+    stats = get_backup_stats()
+
+    if backup_file and backup_file.exists():
+        size_kb = backup_file.stat().st_size / 1024
+        lines = [
+            "<b>💾 РЕЗЕРВНОЕ КОПИРОВАНИЕ ЗАВЕРШЕНО</b>",
+            "",
+            f" ├ Создан файл: <code>{backup_file.name}</code>",
+            f" ├ Размер копии: <b>{size_kb:.1f} КБ</b>",
+            f" ├ Всего бэкапов в хранилище: <b>{stats['count']}/7</b>",
+            f" └ Общий объём хранилища: <b>{stats['total_kb']:.1f} КБ</b>",
+            "",
+            "<i>Ротация активна: старые копии сверх лимита 7 удаляются автоматически.</i>",
+        ]
+        await status_msg.edit_text("\n".join(lines), parse_mode="HTML")
+    else:
+        await status_msg.edit_text("❌ Ошибка при создании резервной копии базы данных.")
+

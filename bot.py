@@ -8,6 +8,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefaul
 
 from api.app import app
 import api.routes_client as api_client
+from core.backup import database_backup_loop
 from core.config import settings
 from core.lock import SingleInstanceLock
 from core.logger import setup_logger
@@ -34,6 +35,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="block", description="Заблокировать интервал мастера"),
         BotCommand(command="unblock", description="Снять блокировки"),
         BotCommand(command="manual_book", description="Записать клиента"),
+        BotCommand(command="backup", description="Резервное копирование БД"),
     ]
     try:
         # Default scope for all normal users / clients
@@ -134,7 +136,8 @@ async def main() -> None:
 
     stop_task = asyncio.create_task(stop_event.wait())
     watchdog_task = asyncio.create_task(booking_watchdog_loop(bot, stop_event))
-    wait_tasks = [server_task, stop_task, watchdog_task]
+    backup_task = asyncio.create_task(database_backup_loop(stop_event))
+    wait_tasks = [server_task, stop_task, watchdog_task, backup_task]
     if bot_task:
         wait_tasks.append(bot_task)
 

@@ -77,7 +77,7 @@ async def test_confirm_and_cancel_preserves_relationships_without_missing_greenl
     confirmed = await confirm_booking(
         session=db_session,
         booking_id=booking.id,
-        admin_telegram_id=999000199,
+        admin_telegram_id=5568814893,
     )
     assert confirmed.status == "confirmed"
     # Access relationships directly — should NOT raise MissingGreenlet!
@@ -89,7 +89,7 @@ async def test_confirm_and_cancel_preserves_relationships_without_missing_greenl
     cancelled = await cancel_booking(
         session=db_session,
         booking_id=booking.id,
-        actor_telegram_id=999000199,
+        actor_telegram_id=5568814893,
         is_admin_action=True,
     )
     assert cancelled.status == "cancelled_by_admin"
@@ -107,7 +107,7 @@ async def test_admin_block_invalid_time_returns_400_not_500(client: AsyncClient)
             "end_time": "14:00",
             "reason": "Тест",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res.status_code == 400
     assert "Некорректный формат" in res.json()["detail"]
@@ -194,12 +194,12 @@ async def test_complete_booking_flow(client: AsyncClient, db_session: AsyncSessi
     booking_id = res.json()["booking_id"]
 
     # Admin confirms
-    await client.post(f"/api/admin/bookings/{booking_id}/confirm", headers={"X-Dev-User-Id": "999000199"})
+    await client.post(f"/api/admin/bookings/{booking_id}/confirm", headers={"X-Dev-User-Id": "5568814893"})
 
     # Admin completes visit
     res_complete = await client.post(
         f"/api/admin/bookings/{booking_id}/complete",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_complete.status_code == 200
     assert res_complete.json()["status"] == "completed"
@@ -218,7 +218,7 @@ async def test_unblock_interval_flow(client: AsyncClient):
             "end_time": "14:00",
             "reason": "Обед",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_blk.status_code == 200
     block_id = res_blk.json()["id"]
@@ -226,7 +226,7 @@ async def test_unblock_interval_flow(client: AsyncClient):
     # 2. Unblock interval
     res_unblk = await client.delete(
         f"/api/admin/block/{block_id}",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_unblk.status_code == 200
     assert res_unblk.json()["success"] is True
@@ -273,7 +273,7 @@ async def test_admin_profile_not_overwritten_by_manual_booking(db_session: Async
     from core.models import User
     from sqlalchemy import select
 
-    admin_id = 999000199
+    admin_id = 5568814893
     # 1. Setup admin user in DB
     res = await db_session.execute(select(User).where(User.telegram_id == admin_id))
     admin_user = res.scalar_one_or_none()
@@ -375,7 +375,7 @@ def test_single_instance_lock_pid_check():
 @pytest.mark.asyncio
 async def test_admin_services_catalog_price_and_toggle(client: AsyncClient):
     # 1. List all services
-    res_list = await client.get("/api/admin/services", headers={"X-Dev-User-Id": "999000199"})
+    res_list = await client.get("/api/admin/services", headers={"X-Dev-User-Id": "5568814893"})
     assert res_list.status_code == 200
     services = res_list.json()
     assert len(services) > 0
@@ -387,7 +387,7 @@ async def test_admin_services_catalog_price_and_toggle(client: AsyncClient):
     res_price = await client.post(
         f"/api/admin/services/{target_id}/price",
         json={"price": 3500.0},
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_price.status_code == 200
     assert res_price.json()["price"] == 3500.0
@@ -395,7 +395,7 @@ async def test_admin_services_catalog_price_and_toggle(client: AsyncClient):
     # 3. Toggle active
     res_toggle = await client.post(
         f"/api/admin/services/{target_id}/toggle",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_toggle.status_code == 200
     assert res_toggle.json()["is_active"] != orig_active
@@ -415,7 +415,7 @@ async def test_admin_manual_booking_endpoint(client: AsyncClient):
             "client_phone": "+79998881122",
             "comment": "Через Mini App CRM",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_mb.status_code == 200
     data = res_mb.json()
@@ -425,7 +425,7 @@ async def test_admin_manual_booking_endpoint(client: AsyncClient):
     # Check schedule returns stats and client_telegram_id
     res_sch = await client.get(
         f"/api/admin/schedule?date={target_date}",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_sch.status_code == 200
     sch_data = res_sch.json()
@@ -445,7 +445,7 @@ async def test_admin_masters_crud_and_toggle(client: AsyncClient):
             "experience_years": 6,
             "is_active": True,
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_create.status_code == 200
     master_data = res_create.json()
@@ -457,7 +457,7 @@ async def test_admin_masters_crud_and_toggle(client: AsyncClient):
     # 2. List masters
     res_list = await client.get(
         "/api/admin/masters",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_list.status_code == 200
     masters = res_list.json()
@@ -472,7 +472,7 @@ async def test_admin_masters_crud_and_toggle(client: AsyncClient):
             "full_name": "Мария Свечникова (Топ)",
             "experience_years": 7,
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_update.status_code == 200
     assert res_update.json()["full_name"] == "Мария Свечникова (Топ)"
@@ -481,7 +481,7 @@ async def test_admin_masters_crud_and_toggle(client: AsyncClient):
     # 4. Toggle master active
     res_toggle = await client.post(
         f"/api/admin/masters/{master_id}/toggle",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_toggle.status_code == 200
     assert res_toggle.json()["is_active"] is False
@@ -500,7 +500,7 @@ async def test_admin_services_crud(client: AsyncClient):
             "price": 2800.0,
             "is_active": True,
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_create.status_code == 200
     svc_data = res_create.json()
@@ -516,7 +516,7 @@ async def test_admin_services_crud(client: AsyncClient):
             "description": "Обновленное описание процедуры с питательной сывороткой",
             "price": 3100.0,
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_update.status_code == 200
     assert res_update.json()["price"] == 3100.0
@@ -535,7 +535,7 @@ async def test_admin_salon_settings_update(client: AsyncClient):
             "description": "Флагманская студия ногтевого сервиса премиум-класса",
             "contact_telegram": "@atelier_support",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_update.status_code == 200
     data = res_update.json()
@@ -603,7 +603,7 @@ async def test_idempotent_confirm_and_live_bot_card_sync(client: AsyncClient, db
     # 2. Confirm via Mini App Admin API -> must edit tracked Telegram message!
     res_conf1 = await client.post(
         f"/api/admin/bookings/{booking_id}/confirm",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_conf1.status_code == 200
     assert res_conf1.json()["status"] == "confirmed"
@@ -615,7 +615,7 @@ async def test_idempotent_confirm_and_live_bot_card_sync(client: AsyncClient, db
     # 3. Confirm a second time (idempotency check — no ValueError!)
     res_conf2 = await client.post(
         f"/api/admin/bookings/{booking_id}/confirm",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_conf2.status_code == 200
     assert res_conf2.json()["status"] == "confirmed"
@@ -636,7 +636,7 @@ async def test_block_interval_rejects_past_and_duplicates(client: AsyncClient):
             "end_time": "14:00",
             "reason": "Обед",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_past.status_code == 400
     assert "прошедш" in res_past.json()["detail"].lower()
@@ -651,7 +651,7 @@ async def test_block_interval_rejects_past_and_duplicates(client: AsyncClient):
             "end_time": "14:00",
             "reason": "Обед",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_ok.status_code == 200
 
@@ -665,7 +665,7 @@ async def test_block_interval_rejects_past_and_duplicates(client: AsyncClient):
             "end_time": "14:00",
             "reason": "Обед дубль",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_dup.status_code == 400
     assert "уже установлен перерыв" in res_dup.json()["detail"].lower()
@@ -682,7 +682,7 @@ async def test_delete_master_and_service_archives_cleanly(client: AsyncClient):
             "experience_years": 2,
             "telegram_username": "@megausername1",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_m.status_code == 200
     m_id = res_m.json()["id"]
@@ -690,12 +690,12 @@ async def test_delete_master_and_service_archives_cleanly(client: AsyncClient):
 
     res_del_m = await client.delete(
         f"/api/admin/masters/{m_id}",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_del_m.status_code == 200
 
     # Verify deleted master is no longer in /api/admin/masters or /api/masters
-    admin_masters = (await client.get("/api/admin/masters", headers={"X-Dev-User-Id": "999000199"})).json()
+    admin_masters = (await client.get("/api/admin/masters", headers={"X-Dev-User-Id": "5568814893"})).json()
     assert all(m["id"] != m_id for m in admin_masters)
 
     # 2. Create a temporary service and delete it
@@ -707,17 +707,17 @@ async def test_delete_master_and_service_archives_cleanly(client: AsyncClient):
             "duration_minutes": 30,
             "price": 900.0,
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_s.status_code == 200
     s_id = res_s.json()["id"]
 
     res_del_s = await client.delete(
         f"/api/admin/services/{s_id}",
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
     assert res_del_s.status_code == 200
-    admin_services = (await client.get("/api/admin/services", headers={"X-Dev-User-Id": "999000199"})).json()
+    admin_services = (await client.get("/api/admin/services", headers={"X-Dev-User-Id": "5568814893"})).json()
     assert all(s["id"] != s_id for s in admin_services)
 
 
@@ -735,7 +735,7 @@ async def test_slots_include_unavailable_and_load_balancing(client: AsyncClient)
             "end_time": "14:00",
             "reason": "Перерыв",
         },
-        headers={"X-Dev-User-Id": "999000199"},
+        headers={"X-Dev-User-Id": "5568814893"},
     )
 
     # Request slots with include_unavailable=true for master 1
@@ -850,7 +850,7 @@ async def test_master_decline_and_client_reassign_flow(db_session: AsyncSession)
     m1.telegram_id = 777001
     await db_session.commit()
 
-    target_date = date.today() + timedelta(days=15)
+    target_date = date.today() + timedelta(days=5)
     booking = await create_booking(
         session=db_session,
         client_telegram_id=888777,
@@ -883,7 +883,7 @@ async def test_master_decline_and_client_reassign_flow(db_session: AsyncSession)
 async def test_watchdog_auto_assigns_expired_pending_booking(db_session: AsyncSession):
     from core.booking_service import create_booking, process_expired_bookings
 
-    target_date = date.today() + timedelta(days=16)
+    target_date = date.today() + timedelta(days=6)
     booking = await create_booking(
         session=db_session,
         client_telegram_id=666555,
@@ -957,7 +957,7 @@ async def test_cannot_claim_booking_assigned_to_specific_master(db_session: Asyn
         m2.archived_at = None
     await db_session.commit()
 
-    target_date = date.today() + timedelta(days=17)
+    target_date = date.today() + timedelta(days=7)
     booking = await create_booking(
         session=db_session,
         client_telegram_id=111222,
@@ -982,7 +982,7 @@ async def test_cannot_claim_booking_assigned_to_specific_master(db_session: Asyn
 async def test_cannot_decline_or_cancel_completed_booking(db_session: AsyncSession):
     from core.booking_service import cancel_booking, complete_booking, create_booking, decline_booking_by_master
 
-    target_date = date.today() + timedelta(days=18)
+    target_date = date.today() + timedelta(days=8)
     booking = await create_booking(
         session=db_session,
         client_telegram_id=444333,
@@ -993,7 +993,7 @@ async def test_cannot_decline_or_cancel_completed_booking(db_session: AsyncSessi
         booking_date=target_date,
         start_time=time(11, 0),
     )
-    booking = await complete_booking(db_session, booking.id, admin_telegram_id=999000199)
+    booking = await complete_booking(db_session, booking.id, admin_telegram_id=5568814893)
     assert booking.status == "completed"
 
     # Setup master 1 telegram ID
@@ -1010,7 +1010,7 @@ async def test_cannot_decline_or_cancel_completed_booking(db_session: AsyncSessi
 
     # Cancellation must be rejected
     with pytest.raises(ValueError, match="Нельзя отменить уже завершённый визит"):
-        await cancel_booking(db_session, booking.id, actor_telegram_id=999000199, is_admin_action=True)
+        await cancel_booking(db_session, booking.id, actor_telegram_id=5568814893, is_admin_action=True)
 
 
 @pytest.mark.asyncio
@@ -1018,7 +1018,7 @@ async def test_admin_reassign_rejects_busy_or_break_master(db_session: AsyncSess
     from core.booking_service import admin_reassign_booking, block_time_interval, create_booking
     from core.models import Master
 
-    target_date = date.today() + timedelta(days=19)
+    target_date = date.today() + timedelta(days=9)
     # Master 1 booking
     b1 = await create_booking(
         session=db_session,
@@ -1039,7 +1039,7 @@ async def test_admin_reassign_rejects_busy_or_break_master(db_session: AsyncSess
         start_time=time(12, 0),
         end_time=time(13, 0),
         reason="Обед",
-        admin_telegram_id=999000199,
+        admin_telegram_id=5568814893,
     )
 
     # Admin attempts to reassign b1 to master 2 who has a break
@@ -1048,7 +1048,7 @@ async def test_admin_reassign_rejects_busy_or_break_master(db_session: AsyncSess
             session=db_session,
             booking_id=b1.id,
             new_master_id=2,
-            admin_telegram_id=999000199,
+            admin_telegram_id=5568814893,
         )
 
 

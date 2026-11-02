@@ -6,6 +6,14 @@ from ui.formatters import escape, format_date, format_money, format_status, form
 from ui.icons import tg_icon
 
 
+def get_booking_price(b: Booking) -> float:
+    if getattr(b, "price", None) is not None and b.price > 0:
+        return float(b.price)
+    if getattr(b, "service", None) and getattr(b.service, "price", None) is not None:
+        return float(b.service.price)
+    return 0.0
+
+
 def start_dashboard(is_admin: bool = False) -> str:
     salon = settings.salon
     name_str = salon.get('name', 'Nail Atelier').upper()
@@ -53,7 +61,7 @@ def my_bookings_dashboard(bookings: List[Booking]) -> str:
         lines.append(f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')}")
         lines.append(f" ├ Мастер: {escape(b.master.full_name if b.master else 'Мастер')}")
         lines.append(f" ├ Дата: {format_date(b.booking_date)} · {format_time(b.start_time)}—{format_time(b.end_time)}")
-        lines.append(f"{prefix}Стоимость: {format_money(b.service.price if b.service else 0)}")
+        lines.append(f"{prefix}Стоимость: {format_money(get_booking_price(b))}")
         if not is_last:
             lines.append("")
 
@@ -157,8 +165,8 @@ def contact_dashboard() -> str:
 
 
 def admin_schedule_dashboard(bookings: List[Booking], target_date: date, blocks: Optional[List[Any]] = None) -> str:
-    total_rev = sum(b.service.price for b in bookings if b.service and b.status in ("confirmed", "completed"))
-    done_rev = sum(b.service.price for b in bookings if b.service and b.status == "completed")
+    total_rev = sum(get_booking_price(b) for b in bookings if b.status in ("confirmed", "completed"))
+    done_rev = sum(get_booking_price(b) for b in bookings if b.status == "completed")
     done_count = sum(1 for b in bookings if b.status == "completed")
 
     lines = [
@@ -190,7 +198,7 @@ def admin_schedule_dashboard(bookings: List[Booking], target_date: date, blocks:
         )
         lines.append(f" ├ Клиент: {escape(b.client_name)} · {escape(b.client_phone)}")
         lines.append(f" ├ Мастер: {escape(b.master.full_name if b.master else 'Мастер')}")
-        lines.append(f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')} ({format_money(b.service.price if b.service else 0)})")
+        lines.append(f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')} ({format_money(get_booking_price(b))})")
         if b.comment:
             lines.append(f" ├ Пожелания: <i>{escape(b.comment)}</i>")
         lines.append(f" └ Управление: /booking_{b.id}")
@@ -222,7 +230,7 @@ def admin_booking_card(b: Booking) -> str:
         f" ├ Telegram: {tg_link} (ID: <code>{b.client_user.telegram_id if b.client_user else '—'}</code>)",
         f" └ Комментарий: {escape(b.comment) if b.comment else 'Без комментария'}",
         "",
-        f"Стоимость к оплате: <b>{format_money(b.service.price if b.service else 0)}</b>",
+        f"Стоимость к оплате: <b>{format_money(get_booking_price(b))}</b>",
     ]
     return "\n".join(lines)
 
@@ -236,7 +244,7 @@ def notification_new_booking(b: Booking) -> str:
         f" ├ Дата: {format_date(b.booking_date)} · {format_time(b.start_time)}—{format_time(b.end_time)}",
         f" ├ Мастер: {escape(b.master.full_name if b.master else 'Мастер')}",
         f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')}",
-        f" └ Стоимость: {format_money(b.service.price if b.service else 0)}",
+        f" └ Стоимость: {format_money(get_booking_price(b))}",
         "",
         "<b>Клиент:</b>",
         f" ├ {escape(b.client_name)} ({escape(b.client_phone)})",
@@ -258,7 +266,7 @@ def notification_client_booking_created(b: Booking) -> str:
         f" ├ Время: {format_time(b.start_time)} — {format_time(b.end_time)}",
         f" ├ Мастер: {escape(b.master.full_name if b.master else 'Мастер')}",
         f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')}",
-        f" └ Стоимость: {format_money(b.service.price if b.service else 0)}",
+        f" └ Стоимость: {format_money(get_booking_price(b))}",
         "",
         f"Адрес студии: {escape(salon.get('address', ''))}",
         "",
@@ -310,7 +318,7 @@ def master_order_broadcast_card(b: Booking) -> str:
         f" ├ Дата: {format_date(b.booking_date)}",
         f" ├ Время: {format_time(b.start_time)} — {format_time(b.end_time)} ({b.service.duration_minutes if b.service else 60} мин)",
         f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')}",
-        f" └ Стоимость: {format_money(b.service.price if b.service else 0)}",
+        f" └ Стоимость: {format_money(get_booking_price(b))}",
         "",
         "<b>Данные клиента:</b>",
         f" ├ Имя: {escape(b.client_name)}",
@@ -331,7 +339,7 @@ def master_assigned_card(b: Booking, is_auto: bool = False) -> str:
         f" ├ Дата: {format_date(b.booking_date)}",
         f" ├ Время: {format_time(b.start_time)} — {format_time(b.end_time)}",
         f" ├ Услуга: {escape(b.service.name if b.service else 'Услуга')}",
-        f" └ Стоимость: {format_money(b.service.price if b.service else 0)}",
+        f" └ Стоимость: {format_money(get_booking_price(b))}",
         "",
         "<b>Клиент:</b>",
         f" ├ {escape(b.client_name)} ({escape(b.client_phone)})",

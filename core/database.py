@@ -67,6 +67,14 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE bookings ADD COLUMN assignment_deadline DATETIME"))
         if "client_reassign_deadline" not in b_cols:
             await conn.execute(text("ALTER TABLE bookings ADD COLUMN client_reassign_deadline DATETIME"))
+        if "price" not in b_cols:
+            await conn.execute(text("ALTER TABLE bookings ADD COLUMN price FLOAT DEFAULT 0.0"))
+            # Backfill price from services table for existing historical bookings
+            await conn.execute(text(
+                "UPDATE bookings SET price = ("
+                "  SELECT price FROM services WHERE services.id = bookings.service_id"
+                ") WHERE price IS NULL OR price = 0.0"
+            ))
 
     # Seed initial data if tables are empty
     async with async_session_maker() as session:

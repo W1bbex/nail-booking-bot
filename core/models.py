@@ -80,6 +80,8 @@ class Booking(Base):
     start_time: Mapped[time] = mapped_column(Time, index=True)
     end_time: Mapped[time] = mapped_column(Time, index=True)
 
+    price: Mapped[float] = mapped_column(Float, default=0.0)
+
     status: Mapped[str] = mapped_column(
         String(32), default="pending", index=True
     )  # pending, confirmed, cancelled_by_client, cancelled_by_admin, completed, awaiting_client_choice

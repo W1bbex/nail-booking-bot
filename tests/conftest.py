@@ -29,9 +29,10 @@ TestingSessionLocal = async_sessionmaker(test_engine, expire_on_commit=False)
 @pytest.fixture(autouse=True)
 def setup_test_settings():
     old_dev = settings.dev_mode
-    old_admins = settings.admin_telegram_ids
+    old_admins = list(settings.admin_telegram_ids)
     settings.dev_mode = True
-    settings.admin_telegram_ids = [999000199]
+    if 5568814893 not in settings.admin_telegram_ids:
+        settings.admin_telegram_ids.append(5568814893)
     yield
     settings.dev_mode = old_dev
     settings.admin_telegram_ids = old_admins
@@ -104,7 +105,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         )
         u_admin = User(
             id=2,
-            telegram_id=999000199,
+            telegram_id=5568814893,
             full_name="Администратор",
             phone="+79998887766",
             role="admin",
