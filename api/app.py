@@ -31,13 +31,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration
+# Explicit CORS policy restricted to trusted Mini App origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r".*",
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Dev-User-Id", "Authorization"],
 )
 
 # Mount API routers

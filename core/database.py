@@ -76,6 +76,12 @@ async def init_db() -> None:
                 ") WHERE price IS NULL OR price = 0.0"
             ))
 
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_master_slot "
+            "ON bookings (master_id, booking_date, start_time) "
+            "WHERE status IN ('pending', 'confirmed', 'awaiting_client_choice')"
+        ))
+
     # Seed initial data if tables are empty
     async with async_session_maker() as session:
         # Check masters

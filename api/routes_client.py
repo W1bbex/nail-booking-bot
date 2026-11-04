@@ -271,7 +271,7 @@ async def api_create_booking(
         raise HTTPException(status_code=400, detail=str(val_err))
     except Exception as exc:
         logger.exception("Failed to create booking")
-        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {exc}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера. Пожалуйста, попробуйте позже.")
 
 
 @router.get("/bookings")

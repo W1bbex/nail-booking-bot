@@ -641,7 +641,7 @@ async def api_admin_update_salon(
         return {"success": True, "salon": updated}
     except Exception as e:
         logger.exception("Failed to update salon settings")
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения настроек: {e}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при сохранении настроек.")
 
 
 class UpdatePriceRequest(BaseModel):
@@ -742,4 +742,4 @@ async def api_admin_manual_booking(
         raise HTTPException(status_code=400, detail=str(val_err))
     except Exception as exc:
         logger.exception("Manual booking creation failed")
-        raise HTTPException(status_code=500, detail=f"Ошибка создания записи: {exc}")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при создании записи.")

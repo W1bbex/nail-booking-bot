@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -18,6 +19,13 @@ logger = setup_logger("booking_service")
 _booking_lock = asyncio.Lock()
 
 ACTIVE_BOOKING_STATUSES = ["pending", "confirmed", "awaiting_client_choice"]
+
+
+def _mask_phone(phone: str) -> str:
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) >= 6:
+        return f"+{digits[:2]}***{digits[-2:]}"
+    return "***"
 
 
 def get_moscow_now() -> datetime:
@@ -375,13 +383,20 @@ async def create_booking(
             created_at=datetime.now(timezone.utc),
         )
         session.add(booking)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise ValueError(
+                f"Выбранное время ({start_time.strftime('%H:%M')} — {end_time.strftime('%H:%M')}) "
+                f"уже занято другим клиентом у мастера {master.full_name}"
+            )
         await session.refresh(booking)
 
         logger.info(
-            f"Booking created #{booking.id}: {clean_name} ({clean_phone}) -> "
-            f"Master: {master.full_name}, Service: {service.name}, "
-            f"Date: {booking_date}, {start_time:%H:%M}-{end_time:%H:%M}"
+            f"Booking created #{booking.id}: user_id={user.id} (phone={_mask_phone(clean_phone)}) -> "
+            f"master_id={master.id}, service_id={service.id}, "
+            f"date={booking_date}, {start_time:%H:%M}-{end_time:%H:%M}"
         )
         return booking
 

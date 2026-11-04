@@ -2,9 +2,10 @@ import asyncio
 from datetime import date, time, timedelta
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.booking_service import create_booking
+from core.booking_service import _mask_phone, create_booking
 from core.models import Booking
 
 
@@ -61,3 +62,73 @@ async def test_concurrent_double_booking_prevention(db_session: AsyncSession):
     db_bookings = res.scalars().all()
     assert len(db_bookings) == 1
     assert db_bookings[0].id == results[0].id
+
+
+@pytest.mark.asyncio
+async def test_database_level_unique_index_prevents_multiprocess_race(db_session: AsyncSession):
+    """Verify DB partial unique index rejects conflicting active slots even if asyncio.Lock is bypassed."""
+    target_date = date.today() + timedelta(days=6)
+    slot_start = time(14, 0)
+    slot_end = time(15, 0)
+
+    b1 = Booking(
+        client_user_id=1,
+        master_id=1,
+        service_id=3,
+        booking_date=target_date,
+        start_time=slot_start,
+        end_time=slot_end,
+        price=1900.0,
+        status="pending",
+        client_name="Клиент 1",
+        client_phone="+79991112233",
+    )
+    db_session.add(b1)
+    await db_session.commit()
+    b1_id = b1.id
+
+    # Second process inserts conflicting active booking directly without application lock
+    b2 = Booking(
+        client_user_id=1,
+        master_id=1,
+        service_id=3,
+        booking_date=target_date,
+        start_time=slot_start,
+        end_time=slot_end,
+        price=1900.0,
+        status="confirmed",
+        client_name="Клиент 2",
+        client_phone="+79994445566",
+    )
+    db_session.add(b2)
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+    # Once first booking is cancelled, the partial index allows re-booking the freed slot
+    b1_refreshed = (await db_session.execute(select(Booking).where(Booking.id == b1_id))).scalar_one()
+    b1_refreshed.status = "cancelled_by_client"
+    await db_session.commit()
+
+    b3 = Booking(
+        client_user_id=1,
+        master_id=1,
+        service_id=3,
+        booking_date=target_date,
+        start_time=slot_start,
+        end_time=slot_end,
+        price=1900.0,
+        status="pending",
+        client_name="Клиент 3",
+        client_phone="+79997778899",
+    )
+    db_session.add(b3)
+    await db_session.commit()
+    assert b3.id is not None
+
+
+def test_pii_phone_masking_in_logs():
+    masked = _mask_phone("+7 (999) 123-45-67")
+    assert "123" not in masked
+    assert "45" not in masked
+    assert masked == "+79***67"

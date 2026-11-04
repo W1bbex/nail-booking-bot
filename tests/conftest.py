@@ -31,8 +31,9 @@ def setup_test_settings():
     old_dev = settings.dev_mode
     old_admins = list(settings.admin_telegram_ids)
     settings.dev_mode = True
-    if 5568814893 not in settings.admin_telegram_ids:
-        settings.admin_telegram_ids.append(5568814893)
+    for test_admin_id in (5568814893, 999000199):
+        if test_admin_id not in settings.admin_telegram_ids:
+            settings.admin_telegram_ids.append(test_admin_id)
     yield
     settings.dev_mode = old_dev
     settings.admin_telegram_ids = old_admins

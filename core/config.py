@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 logger = logging.getLogger("core.config")
@@ -57,6 +58,25 @@ class Settings:
             self.public_url = f"http://127.0.0.1:{self.port}"
         if self.dev_mode and self.host not in ("127.0.0.1", "::1", "localhost"):
             raise ValueError("dev_mode разрешён только на локальном интерфейсе")
+
+        # Explicit trusted CORS origins (no wildcard regex in production)
+        parsed_pub = urlparse(self.public_url)
+        pub_origin = (
+            f"{parsed_pub.scheme}://{parsed_pub.netloc}"
+            if parsed_pub.scheme and parsed_pub.netloc
+            else ""
+        )
+        configured_origins = self.server.get("allowed_origins", [])
+        origins_set = {"https://web.telegram.org"}
+        if pub_origin:
+            origins_set.add(pub_origin)
+        for o in configured_origins:
+            if isinstance(o, str) and o.strip():
+                origins_set.add(o.strip().rstrip("/"))
+        if self.dev_mode or self.host in ("127.0.0.1", "::1", "localhost"):
+            origins_set.add(f"http://127.0.0.1:{self.port}")
+            origins_set.add(f"http://localhost:{self.port}")
+        self.allowed_origins: List[str] = sorted(origins_set)
 
         # Database connection URL
         self.database_url: str = f"sqlite+aiosqlite:///{DB_PATH.as_posix()}"

@@ -6,7 +6,9 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
+    text,
     String,
     Text,
     Time,
@@ -101,6 +103,18 @@ class Booking(Base):
     client_user: Mapped["User"] = relationship("User", back_populates="bookings")
     master: Mapped["Master"] = relationship("Master", back_populates="bookings")
     service: Mapped["Service"] = relationship("Service", back_populates="bookings")
+
+    __table_args__ = (
+        Index(
+            "idx_unique_active_master_slot",
+            "master_id",
+            "booking_date",
+            "start_time",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'confirmed', 'awaiting_client_choice')"),
+            postgresql_where=text("status IN ('pending', 'confirmed', 'awaiting_client_choice')"),
+        ),
+    )
 
 
 class BlockedInterval(Base):
