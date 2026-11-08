@@ -20,7 +20,8 @@
     "work_start_hour": 10,
     "work_end_hour": 21,
     "horizon_days": 14,
-    "allow_client_cancel_hours": 2
+    "allow_client_cancel_hours": 2,
+    "min_lead_minutes": 30
   },
   "admin_telegram_ids": [],
   "initial_masters": [

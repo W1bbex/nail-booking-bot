@@ -710,6 +710,7 @@ async def api_admin_manual_booking(
             booking_date=b_date,
             start_time=b_time,
             comment=payload.comment,
+            ignore_lead_time=True,
         )
         confirmed_booking = await confirm_booking(db, booking.id, admin_user.telegram_id)
 

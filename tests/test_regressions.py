@@ -1052,5 +1052,43 @@ async def test_admin_reassign_rejects_busy_or_break_master(db_session: AsyncSess
         )
 
 
+@pytest.mark.asyncio
+async def test_create_booking_min_lead_time_enforcement(db_session: AsyncSession, monkeypatch):
+    """Verify create_booking enforces min_lead_minutes for clients but allows override for admins."""
+    from datetime import date, datetime, time
+    from core.booking_service import create_booking
 
+    target_date = date.today()
+    # Mock current time to 12:10 (so 12:30 is 20 min lead time, less than required 30 min)
+    now_fixed = datetime.combine(target_date, time(12, 10))
+    monkeypatch.setattr("core.booking_service.get_moscow_now", lambda: now_fixed)
+
+    # 1. Booking for 12:30 today (20 min < 30 min lead time) must fail for client
+    with pytest.raises(ValueError, match="минимум за 30 минут"):
+        await create_booking(
+            session=db_session,
+            client_telegram_id=999000101,
+            client_name="Клиент Спешит",
+            client_phone="+79991112233",
+            master_id=1,
+            service_id=2,  # 30 min
+            booking_date=target_date,
+            start_time=time(12, 30),
+            ignore_lead_time=False,
+        )
+
+    # 2. Same slot with ignore_lead_time=True (admin walk-in) must succeed
+    admin_booking = await create_booking(
+        session=db_session,
+        client_telegram_id=999000101,
+        client_name="Клиент С Порога",
+        client_phone="+79991112233",
+        master_id=1,
+        service_id=2,  # 30 min
+        booking_date=target_date,
+        start_time=time(12, 30),
+        ignore_lead_time=True,
+    )
+    assert admin_booking.id is not None
+    assert admin_booking.start_time == time(12, 30)
 

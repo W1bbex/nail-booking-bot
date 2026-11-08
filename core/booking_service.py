@@ -170,7 +170,7 @@ async def get_available_slots(
     if target_date < current_dt.date():
         return []
     is_today = (target_date == current_dt.date())
-    min_lead_minutes = 30
+    min_lead_minutes = int(settings.booking.get("min_lead_minutes", 30))
 
     slots = []
     cursor_dt = datetime.combine(target_date, work_start)
@@ -237,6 +237,7 @@ async def create_booking(
     booking_date: date,
     start_time: time,
     comment: Optional[str] = None,
+    ignore_lead_time: bool = False,
 ) -> Booking:
     async with _booking_lock:
         # Check service
@@ -301,11 +302,19 @@ async def create_booking(
         if start_time.minute % slot_step != 0 or start_time.second != 0:
             raise ValueError(f"Время записи должно быть кратно шагу слота ({slot_step} мин)")
 
-        # Check past date/time and booking horizon limit
+        # Check past date/time, minimum lead time, and booking horizon limit
         now_moscow = get_moscow_now()
         slot_dt = datetime.combine(booking_date, start_time)
         if booking_date < now_moscow.date() or (booking_date == now_moscow.date() and slot_dt < now_moscow):
             raise ValueError("Нельзя записаться на прошедшее время")
+
+        if not ignore_lead_time:
+            min_lead_minutes = int(settings.booking.get("min_lead_minutes", 30))
+            earliest_allowed = now_moscow + timedelta(minutes=min_lead_minutes)
+            if slot_dt < earliest_allowed:
+                raise ValueError(
+                    f"Запись возможна минимум за {min_lead_minutes} минут до визита"
+                )
 
         horizon_days = int(settings.booking.get("horizon_days", 14))
         max_booking_date = now_moscow.date() + timedelta(days=horizon_days)
