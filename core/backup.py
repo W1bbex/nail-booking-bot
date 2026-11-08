@@ -64,9 +64,13 @@ def backup_sqlite_database(
 
     try:
         # sqlite3 native online backup
-        with sqlite3.connect(str(src_file)) as src_conn:
-            with sqlite3.connect(str(dest_file)) as dst_conn:
-                src_conn.backup(dst_conn)
+        src_conn = sqlite3.connect(str(src_file))
+        dst_conn = sqlite3.connect(str(dest_file))
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+            src_conn.close()
 
         logger.info(
             f"Database backup created: {dest_file.name} "
@@ -132,7 +136,7 @@ async def database_backup_loop(
         pass
 
     if not stop_event.is_set():
-        backup_sqlite_database(max_backups=max_backups)
+        await asyncio.to_thread(backup_sqlite_database, max_backups=max_backups)
 
     interval_seconds = interval_hours * 3600
     while not stop_event.is_set():
@@ -140,4 +144,4 @@ async def database_backup_loop(
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except asyncio.TimeoutError:
             if not stop_event.is_set():
-                backup_sqlite_database(max_backups=max_backups)
+                await asyncio.to_thread(backup_sqlite_database, max_backups=max_backups)

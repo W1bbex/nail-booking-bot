@@ -1,9 +1,7 @@
-# tg-bot-ui Icon registry & helpers
-# In accordance with tg-bot-ui skill:
-# 1. No generic Unicode emojis in text or buttons.
-# 2. Text uses clean typography, box-drawing characters, and HTML formatting.
+# Telegram Bot custom emoji icons & typographic badges
+# 1. Custom adaptive Telegram emoji IDs for inline buttons and headers
+# 2. Clean typography and box-drawing markers for high contrast and readability
 
-# IDs copied from the verified adaptive icon map shipped with tg-bot-ui.
 ICONS = {
     "booking": "5420099516093214877",
     "calendar": "5420358515506064338",

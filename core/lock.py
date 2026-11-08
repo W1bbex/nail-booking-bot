@@ -15,37 +15,48 @@ class SingleInstanceLock:
         self._acquired = False
 
     def acquire(self) -> bool:
-        if self.lock_path.exists():
-            try:
-                content = self.lock_path.read_text(encoding="utf-8").strip()
-                old_pid = int(content) if content.isdigit() else None
-                if old_pid and self._is_pid_running(old_pid):
-                    logger.warning(f"Another instance is already running with PID {old_pid}.")
-                    return False
-            except Exception:
-                pass
-            # If stale or unreadable, remove it
-            try:
-                self.lock_path.unlink()
-            except Exception:
-                pass
+        current_pid = os.getpid()
 
-        try:
-            current_pid = os.getpid()
-            self.lock_path.write_text(str(current_pid), encoding="utf-8")
-            self._acquired = True
-            return True
-        except Exception as e:
-            print(f"[ERROR] Failed to create lock file {self.lock_path}: {e}", file=sys.stderr)
-            return False
+        for _ in range(2):
+            try:
+                # O_CREAT | O_EXCL guarantees atomic creation with zero TOCTOU race
+                fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(str(current_pid))
+                self._acquired = True
+                return True
+            except FileExistsError:
+                # File exists: inspect if the PID inside is alive
+                try:
+                    content = self.lock_path.read_text(encoding="utf-8").strip()
+                    old_pid = int(content) if content.isdigit() else None
+                    if old_pid and self._is_pid_running(old_pid):
+                        logger.warning(f"Another instance is already running with PID {old_pid}.")
+                        return False
+                except Exception:
+                    pass
+
+                # If stale or unreadable, remove it and retry atomically
+                try:
+                    self.lock_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Failed to create lock file {self.lock_path}: {e}")
+                return False
+
+        return False
 
     def release(self) -> None:
         if self._acquired and self.lock_path.exists():
             try:
-                self.lock_path.unlink()
-                self._acquired = False
+                content = self.lock_path.read_text(encoding="utf-8").strip()
+                if content == str(os.getpid()):
+                    self.lock_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            finally:
+                self._acquired = False
 
     @staticmethod
     def _is_pid_running(pid: int) -> bool:

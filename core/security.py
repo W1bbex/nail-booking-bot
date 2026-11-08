@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
@@ -25,6 +26,7 @@ def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any
 
     pairs = dict(parse_qsl(init_data, keep_blank_values=True))
     received_hash = pairs.pop("hash", None)
+    pairs.pop("signature", None)
     if not received_hash:
         raise ValueError("Отсутствует контрольный хеш hash в initData")
 
@@ -111,8 +113,12 @@ async def get_current_user(
             role="admin" if is_admin else "client",
         )
         db.add(user)
-        await db.commit()
-        await db.refresh(user)
+        try:
+            await db.commit()
+            await db.refresh(user)
+        except IntegrityError:
+            await db.rollback()
+            user = (await db.execute(select(User).where(User.telegram_id == telegram_id))).scalar_one()
     else:
         # Update admin role dynamically based on settings.admin_telegram_ids without clobbering master role
         if settings.is_admin(telegram_id):
@@ -133,9 +139,18 @@ async def get_current_user(
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not settings.is_admin(user.telegram_id):
+    if not (settings.is_admin(user.telegram_id) or user.role in ('admin', 'master')):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Недостаточно прав: раздел доступен только администраторам и мастерам",
         )
     return user
+
+def deterministic_virtual_telegram_id(phone: str) -> int:
+    """Generates a deterministic negative virtual telegram ID from client phone."""
+    import hashlib
+    clean = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not clean:
+        clean = "0000000000"
+    digest = int(hashlib.sha256(clean.encode("utf-8")).hexdigest()[:8], 16)
+    return -(digest % 1000000000 + 1)

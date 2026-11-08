@@ -74,9 +74,13 @@ def choose_action() -> str:
     selected = 0
     armed = None
     left_down = False
-    with ConsoleInput() as console:
-        enable_color()
-        return read_menu_events(console, menu_hit, selected, armed, left_down)
+    try:
+        with ConsoleInput() as console:
+            enable_color()
+            return read_menu_events(console, menu_hit, selected, armed, left_down)
+    except (OSError, Exception):
+        show_menu()
+        return input("  Ваш выбор: ").strip()
 
 
 def read_menu_events(console, menu_hit, selected=0, armed=None, left_down=False) -> str:

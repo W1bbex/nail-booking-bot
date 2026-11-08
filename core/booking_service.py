@@ -385,12 +385,18 @@ async def create_booking(
         session.add(booking)
         try:
             await session.commit()
-        except IntegrityError:
+        except IntegrityError as e:
             await session.rollback()
-            raise ValueError(
-                f"Выбранное время ({start_time.strftime('%H:%M')} — {end_time.strftime('%H:%M')}) "
-                f"уже занято другим клиентом у мастера {master.full_name}"
-            )
+            err_msg = str(e).lower()
+            if "idx_unique_active_master_slot" in err_msg or (
+                "unique" in err_msg and any(f in err_msg for f in ("master_id", "booking_date", "start_time"))
+            ):
+                raise ValueError(
+                    f"Выбранное время ({start_time.strftime('%H:%M')} — {end_time.strftime('%H:%M')}) "
+                    f"уже занято другим клиентом у мастера {master.full_name}"
+                )
+            logger.error(f"Неожиданная ошибка целостности базы данных при создании брони: {e}")
+            raise
         await session.refresh(booking)
 
         logger.info(
@@ -1101,7 +1107,10 @@ async def decline_booking_by_master(
 ) -> tuple[bool, str, Optional[Booking]]:
     async with _booking_lock:
         master = (await session.execute(
-            select(Master).where(Master.telegram_id == master_telegram_id)
+            select(Master).where(
+                Master.telegram_id == master_telegram_id,
+                Master.archived_at.is_(None),
+            )
         )).scalar_one_or_none()
         if not master:
             return False, "Вы не зарегистрированы как мастер студии", None
@@ -1119,6 +1128,15 @@ async def decline_booking_by_master(
             return False, "Запись не найдена", None
 
         if booking.master_id != master.id:
+            if booking.is_any_master:
+                # Мастер не назначен персонально, но получил броадкаст и отказывается от заявки
+                cur_declined = [int(x) for x in (booking.declined_master_ids or "").split(",") if x.strip().isdigit()]
+                if master.id not in cur_declined:
+                    cur_declined.append(master.id)
+                booking.declined_master_ids = ",".join(str(x) for x in cur_declined)
+                await session.commit()
+                await session.refresh(booking)
+                return True, "declined_broadcast", booking
             return False, "Вы не являетесь назначенным мастером этой записи", booking
 
         if booking.status not in ("pending", "confirmed"):
@@ -1412,136 +1430,138 @@ async def sync_booking_messages(
 
 
 async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
-    now_m = get_moscow_now()
-    processed_count = 0
+    async with _booking_lock:
+        now_m = get_moscow_now()
+        processed_count = 0
 
-    # 1. Process awaiting_client_choice where deadline expired -> broadcast to other free masters
-    res_awaiting = await session.execute(
-        select(Booking)
-        .options(
-            selectinload(Booking.client_user),
-            selectinload(Booking.master),
-            selectinload(Booking.service),
+        # 1. Process awaiting_client_choice where deadline expired -> broadcast to other free masters
+        res_awaiting = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.client_user),
+                selectinload(Booking.master),
+                selectinload(Booking.service),
+            )
+            .where(
+                Booking.status == "awaiting_client_choice",
+                Booking.client_reassign_deadline.is_not(None),
+                Booking.client_reassign_deadline <= now_m,
+            )
         )
-        .where(
-            Booking.status == "awaiting_client_choice",
-            Booking.client_reassign_deadline.is_not(None),
-            Booking.client_reassign_deadline <= now_m,
-        )
-    )
-    awaiting_list = list(res_awaiting.scalars().all())
-    for b in awaiting_list:
-        b.is_any_master = True
-        b.status = "pending"
-        b.client_reassign_deadline = None
-        b.assignment_deadline = calculate_assignment_deadline(b.booking_date)
-        cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
-        other_free = await get_free_active_masters(
-            session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
-        )
-        if other_free:
-            b.master_id = other_free[0].id
-        await session.commit()
-        await session.refresh(b)
-        processed_count += 1
-        logger.info(f"Booking #{b.id} client reassign deadline expired -> switched to pending broadcast")
-
-        if bot:
-            await sync_booking_messages(session, bot, b.id)
-            # Alert owner and free masters
-            from ui.dashboards import master_order_broadcast_card
-            from ui.keyboards import master_claim_keyboard
-            claim_text = master_order_broadcast_card(b)
-            claim_kb = master_claim_keyboard(b.id)
-            for m in other_free:
-                if m.telegram_id:
-                    try:
-                        s_msg = await bot.send_message(m.telegram_id, claim_text, reply_markup=claim_kb, parse_mode="HTML")
-                        await record_booking_message(session, b.id, m.telegram_id, s_msg.message_id, "master_claim")
-                    except Exception:
-                        pass
-
-    # 2. Process pending bookings where assignment_deadline expired
-    res_pending = await session.execute(
-        select(Booking)
-        .options(
-            selectinload(Booking.client_user),
-            selectinload(Booking.master),
-            selectinload(Booking.service),
-        )
-        .where(
-            Booking.status == "pending",
-            Booking.assignment_deadline.is_not(None),
-            Booking.assignment_deadline <= now_m,
-        )
-    )
-    pending_list = list(res_pending.scalars().all())
-    auto_assign_enabled = bool(settings.salon.get("auto_assign_on_timeout", True))
-
-    for b in pending_list:
-        cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
-        other_free = await get_free_active_masters(
-            session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
-        )
-
-        if auto_assign_enabled and other_free:
-            best_master = other_free[0]
-            b.master_id = best_master.id
-            b.status = "confirmed"
-            b.confirmed_at = datetime.now(timezone.utc)
-            b.assignment_deadline = None
+        awaiting_list = list(res_awaiting.scalars().all())
+        for b in awaiting_list:
+            b.is_any_master = True
+            b.status = "pending"
+            b.client_reassign_deadline = None
+            b.assignment_deadline = calculate_assignment_deadline(b.booking_date)
+            cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
+            other_free = await get_free_active_masters(
+                session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
+            )
+            if other_free:
+                b.master_id = other_free[0].id
             await session.commit()
             await session.refresh(b)
             processed_count += 1
-            logger.info(f"Booking #{b.id} auto-assigned to master {best_master.full_name} upon timeout")
+            logger.info(f"Booking #{b.id} client reassign deadline expired -> switched to pending broadcast")
 
             if bot:
                 await sync_booking_messages(session, bot, b.id)
-                # Notify master
-                from ui.dashboards import master_assigned_card, notification_booking_confirmed
-                from ui.keyboards import master_assigned_keyboard
-                if best_master.telegram_id:
-                    try:
-                        m_text = master_assigned_card(b, is_auto=True)
-                        m_kb = master_assigned_keyboard(b.id)
-                        await bot.send_message(best_master.telegram_id, m_text, reply_markup=m_kb, parse_mode="HTML")
-                    except Exception:
-                        pass
-                # Notify client
-                if b.client_user and b.client_user.telegram_id:
-                    try:
-                        c_text = notification_booking_confirmed(b)
-                        await bot.send_message(b.client_user.telegram_id, c_text, parse_mode="HTML")
-                    except Exception:
-                        pass
-                # Notify owner
-                for admin_id in settings.admin_telegram_ids:
-                    try:
-                        await bot.send_message(
-                            admin_id,
-                            f"<b>Внимание:</b> Заявка #{b.id} автоматически закреплена за мастером <b>{best_master.full_name}</b> (по истечении времени ожидания).",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
-        else:
-            # Alert owner that order is pending without master
-            b.assignment_deadline = None
-            await session.commit()
-            processed_count += 1
-            logger.warning(f"Booking #{b.id} expired without auto-assignment. Alerting owners.")
-            if bot:
-                for admin_id in settings.admin_telegram_ids:
-                    try:
-                        await bot.send_message(
-                            admin_id,
-                            f"<b>Заявка #{b.id} ожидает назначения мастера!</b>\n\nНи один мастер не взял заказ, требуется ручное назначение через карточку: /booking_{b.id}",
-                            parse_mode="HTML",
-                        )
-                    except Exception:
-                        pass
+                # Alert owner and free masters
+                from ui.dashboards import master_order_broadcast_card
+                from ui.keyboards import master_claim_keyboard
+                claim_text = master_order_broadcast_card(b)
+                claim_kb = master_claim_keyboard(b.id)
+                for m in other_free:
+                    if m.telegram_id:
+                        try:
+                            s_msg = await bot.send_message(m.telegram_id, claim_text, reply_markup=claim_kb, parse_mode="HTML")
+                            await record_booking_message(session, b.id, m.telegram_id, s_msg.message_id, "master_claim")
+                        except Exception:
+                            pass
 
-    return processed_count
+        # 2. Process pending bookings where assignment_deadline expired
+        res_pending = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.client_user),
+                selectinload(Booking.master),
+                selectinload(Booking.service),
+            )
+            .where(
+                Booking.status == "pending",
+                Booking.assignment_deadline.is_not(None),
+                Booking.assignment_deadline <= now_m,
+            )
+        )
+        pending_list = list(res_pending.scalars().all())
+        auto_assign_enabled = bool(settings.salon.get("auto_assign_on_timeout", True))
+
+        for b in pending_list:
+            cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
+            other_free = await get_free_active_masters(
+                session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
+            )
+
+            if auto_assign_enabled and other_free:
+                best_master = other_free[0]
+                b.master_id = best_master.id
+                b.status = "confirmed"
+                b.confirmed_at = datetime.now(timezone.utc)
+                b.assignment_deadline = None
+                await session.commit()
+                await session.refresh(b, attribute_names=["master_id", "status", "confirmed_at", "assignment_deadline"])
+                processed_count += 1
+                logger.info(f"Booking #{b.id} auto-assigned to master {best_master.full_name} upon timeout")
+
+                if bot:
+                    await sync_booking_messages(session, bot, b.id)
+                    # Notify master
+                    from ui.dashboards import master_assigned_card, notification_booking_confirmed
+                    from ui.keyboards import master_assigned_keyboard
+                    if best_master.telegram_id:
+                        try:
+                            m_text = master_assigned_card(b, is_auto=True)
+                            m_kb = master_assigned_keyboard(b.id)
+                            await bot.send_message(best_master.telegram_id, m_text, reply_markup=m_kb, parse_mode="HTML")
+                        except Exception:
+                            pass
+                    # Notify client
+                    if b.client_user and b.client_user.telegram_id:
+                        try:
+                            c_text = notification_booking_confirmed(b)
+                            await bot.send_message(b.client_user.telegram_id, c_text, parse_mode="HTML")
+                        except Exception:
+                            pass
+                    # Notify owner
+                    for admin_id in settings.admin_telegram_ids:
+                        try:
+                            await bot.send_message(
+                                admin_id,
+                                f"<b>Внимание:</b> Заявка #{b.id} автоматически закреплена за мастером <b>{best_master.full_name}</b> (по истечении времени ожидания).",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+            else:
+                # Alert owner that order is pending without master
+                b.assignment_deadline = None
+                await session.commit()
+                processed_count += 1
+                logger.warning(f"Booking #{b.id} expired without auto-assignment. Alerting owners.")
+                if bot:
+                    for admin_id in settings.admin_telegram_ids:
+                        try:
+                            await bot.send_message(
+                                admin_id,
+                                f"<b>Заявка #{b.id} ожидает назначения мастера!</b>\n\nНи один мастер не взял заказ, требуется ручное назначение через карточку: /booking_{b.id}",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+
+        return processed_count
+
 
 
 

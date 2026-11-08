@@ -697,7 +697,8 @@ async def api_admin_manual_booking(
         existing_client = (await db.execute(
             select(User).where(User.phone == clean_phone)
         )).scalars().first()
-        target_tg_id = existing_client.telegram_id if existing_client else -(abs(hash(clean_phone)) % 1000000000 + 1)
+        from core.security import deterministic_virtual_telegram_id
+        target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(clean_phone)
 
         booking = await create_booking(
             session=db,

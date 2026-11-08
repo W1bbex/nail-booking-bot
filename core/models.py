@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timezone
 from typing import List, Optional
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -28,7 +29,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    telegram_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(160), default="")
     phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     role: Mapped[str] = mapped_column(String(32), default="client")  # client, admin, master
@@ -48,7 +49,7 @@ class Master(Base):
     experience_years: Mapped[int] = mapped_column(Integer, default=3)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_username: Mapped[Optional[str]] = mapped_column(String(80), nullable=True, default=None)
-    telegram_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True, default=None)
+    telegram_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True, default=None)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, default=None)
 
     bookings: Mapped[List["Booking"]] = relationship("Booking", back_populates="master")
@@ -135,7 +136,7 @@ class BookingMessage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), index=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
     message_id: Mapped[int] = mapped_column(Integer)
     kind: Mapped[str] = mapped_column(String(32), default="admin_card")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

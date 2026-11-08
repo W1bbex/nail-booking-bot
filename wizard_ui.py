@@ -64,40 +64,45 @@ def choose(title: str, options: tuple, lines=()) -> str:
     from console_mouse import ConsoleInput
     from launcher import enable_color
     selected, armed, left = 0, None, False
-    with ConsoleInput() as console:
-        while True:
-            clear()
-            console.enable_mouse()
-            panel(title, lines)
-            x, y = console.cursor()
-            for index, (_key, label) in enumerate(options):
-                row = f"  {'›' if index == selected else ' '}  {label}"
-                print(f"\033[7m{row}\033[0m" if index == selected and enable_color() else row)
-                print()
-            print("  ↑↓ / колесо / мышь — выбор  ·  Enter — дальше  ·  Esc — назад", flush=True)
+    try:
+        with ConsoleInput() as console:
             while True:
-                event = console.read()
-                if event.event_type == 1 and event.event.key.down:
-                    key = event.event.key
-                    if key.virtual_key in (0x1B,): raise KeyboardInterrupt
-                    if key.virtual_key == 13: return options[selected][0]
-                    if key.virtual_key in (0x26, 0x28):
-                        selected = (selected + (-1 if key.virtual_key == 0x26 else 1)) % len(options)
-                        armed = None
-                        break
-                    if key.char.unicode in {key for key, _ in options}: return key.char.unicode
-                elif event.event_type == 2:
-                    mouse = event.event.mouse
-                    if mouse.flags == 4:
-                        selected = max(0, min(len(options)-1, selected + (-1 if mouse.buttons >> 16 < 32768 else 1)))
-                        armed = None
-                        break
-                    pressed = bool(mouse.buttons & 1)
-                    row = (mouse.position.y - y) // 2
-                    if pressed and not left and mouse.flags in (0, 2):
-                        if 0 <= row < len(options) and 2 <= mouse.position.x <= 60:
-                            if armed == row: return options[row][0]
-                            armed, selected, left = row, row, True
+                clear()
+                console.enable_mouse()
+                panel(title, lines)
+                x, y = console.cursor()
+                for index, (_key, label) in enumerate(options):
+                    row = f"  {'›' if index == selected else ' '}  {label}"
+                    print(f"\033[7m{row}\033[0m" if index == selected and enable_color() else row)
+                    print()
+                print("  ↑↓ / колесо / мышь — выбор  ·  Enter — дальше  ·  Esc — назад", flush=True)
+                while True:
+                    event = console.read()
+                    if event.event_type == 1 and event.event.key.down:
+                        key = event.event.key
+                        if key.virtual_key in (0x1B,): raise KeyboardInterrupt
+                        if key.virtual_key == 13: return options[selected][0]
+                        if key.virtual_key in (0x26, 0x28):
+                            selected = (selected + (-1 if key.virtual_key == 0x26 else 1)) % len(options)
+                            armed = None
                             break
-                        armed = None
-                    left = pressed
+                        if key.char.unicode in {key for key, _ in options}: return key.char.unicode
+                    elif event.event_type == 2:
+                        mouse = event.event.mouse
+                        if mouse.flags == 4:
+                            selected = max(0, min(len(options)-1, selected + (-1 if mouse.buttons >> 16 < 32768 else 1)))
+                            armed = None
+                            break
+                        pressed = bool(mouse.buttons & 1)
+                        row = (mouse.position.y - y) // 2
+                        if pressed and not left and mouse.flags in (0, 2):
+                            if 0 <= row < len(options) and 2 <= mouse.position.x <= 60:
+                                if armed == row: return options[row][0]
+                                armed, selected, left = row, row, True
+                                break
+                            armed = None
+                        left = pressed
+    except (OSError, Exception):
+        panel(title, lines)
+        for key, label in options: print(f"  {key}. {label}")
+        return field("Выбор", options[0][0])

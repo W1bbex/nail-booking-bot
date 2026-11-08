@@ -146,13 +146,15 @@ async def main() -> None:
             wait_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        for t in pending:
-            t.cancel()
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
         logger.info("Shutting down services...")
         server.should_exit = True
+        for t in wait_tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*wait_tasks, return_exceptions=True)
         if bot:
             try:
                 await bot.session.close()

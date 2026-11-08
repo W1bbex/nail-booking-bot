@@ -1,3 +1,5 @@
+import asyncio
+import html
 from datetime import date, datetime, time, timedelta
 import math
 import re
@@ -883,7 +885,8 @@ async def handle_input_manual_client_info(message: Message, state: FSMContext) -
             existing_client = (await session.execute(
                 select(User).where(User.phone == clean_phone)
             )).scalar_one_or_none()
-            target_tg_id = existing_client.telegram_id if existing_client else -(abs(hash(clean_phone)) % 1000000000 + 1)
+            from core.security import deterministic_virtual_telegram_id
+            target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(clean_phone)
 
             booking = await create_booking(
                 session=session,
@@ -1040,13 +1043,14 @@ async def cb_master_claim(call: CallbackQuery) -> None:
             ok, msg, booking = await claim_booking_by_master(session, booking_id, call.from_user.id)
             if not ok or not booking:
                 await call.answer(msg, show_alert=True)
-                try:
-                    await call.message.edit_text(
-                        f"<b>Заявка #{booking_id}</b>\n\n{msg}",
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
+                if "уже" in msg.lower() or "отменена" in msg.lower():
+                    try:
+                        await call.message.edit_text(
+                            f"<b>Заявка #{booking_id}</b>\n\n{html.escape(msg)}",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
                 return
 
             card_text = master_assigned_card(booking, is_auto=False)
@@ -1067,9 +1071,9 @@ async def cb_master_claim(call: CallbackQuery) -> None:
                 for aid in settings.admin_telegram_ids:
                     if aid != call.from_user.id:
                         try:
-                            m_name = booking.master.full_name if booking.master else "Мастер"
-                            c_name = booking.client_user.full_name if booking.client_user else "Клиент"
-                            c_phone = booking.client_user.phone if booking.client_user else ""
+                            m_name = html.escape(booking.master.full_name) if booking.master else "Мастер"
+                            c_name = html.escape(booking.client_user.full_name) if booking.client_user else "Клиент"
+                            c_phone = html.escape(booking.client_user.phone or "") if booking.client_user else ""
                             b_date_str = booking.booking_date.strftime("%d.%m.%Y")
                             b_time_str = booking.start_time.strftime("%H:%M")
                             await call.bot.send_message(
@@ -1145,11 +1149,12 @@ async def cb_master_decline(call: CallbackQuery) -> None:
                 if call.bot:
                     for aid in settings.admin_telegram_ids:
                         try:
-                            c_name = booking.client_user.full_name if booking.client_user else "Клиент"
+                            c_name = html.escape(booking.client_user.full_name) if booking.client_user else "Клиент"
+                            esc_master = html.escape(master_name)
                             await call.bot.send_message(
                                 aid,
                                 f"<b>Мастер отказался от заказа #{booking.id}!</b>\n\n"
-                                f"Мастер: {master_name}\n"
+                                f"Мастер: {esc_master}\n"
                                 f"Клиент: {c_name}\n"
                                 f"Клиенту предложено выбрать другого мастера (ожидание 10 мин).",
                                 parse_mode="HTML",
@@ -1184,7 +1189,7 @@ async def cb_master_decline(call: CallbackQuery) -> None:
             elif flow_status == "all_declined" and call.bot:
                 for aid in settings.admin_telegram_ids:
                     try:
-                        c_name = booking.client_user.full_name if booking.client_user else "Клиент"
+                        c_name = html.escape(booking.client_user.full_name) if booking.client_user else "Клиент"
                         b_date_str = booking.booking_date.strftime("%d.%m.%Y")
                         b_time_str = booking.start_time.strftime("%H:%M")
                         await call.bot.send_message(
@@ -1339,7 +1344,7 @@ async def cmd_admin_backup(message: Message) -> None:
     from core.backup import backup_sqlite_database, get_backup_stats
 
     status_msg = await message.answer("🔄 Выполняю безопасный онлайн-снапшот базы данных SQLite...")
-    backup_file = backup_sqlite_database()
+    backup_file = await asyncio.to_thread(backup_sqlite_database)
     stats = get_backup_stats()
 
     if backup_file and backup_file.exists():

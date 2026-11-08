@@ -295,7 +295,7 @@ async def list_my_bookings(
             "status": b.status,
             "service_name": b.service.name if b.service else "",
             "service_duration": b.service.duration_minutes if b.service else 60,
-            "service_price": b.service.price if b.service else 0.0,
+            "service_price": b.price if b.price is not None else (b.service.price if b.service else 0.0),
             "master_name": b.master.full_name if b.master else "",
             "comment": b.comment,
         }
