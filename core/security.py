@@ -139,10 +139,11 @@ async def get_current_user(
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not (settings.is_admin(user.telegram_id) or user.role in ('admin', 'master')):
+    """Only configured administrator identities can use the administrator API."""
+    if not settings.is_admin(user.telegram_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав: раздел доступен только администраторам и мастерам",
+            detail="Недостаточно прав: раздел доступен только администраторам",
         )
     return user
 

@@ -65,7 +65,7 @@ async def test_concurrent_double_booking_prevention(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_database_level_unique_index_prevents_multiprocess_race(db_session: AsyncSession):
+async def test_unique_index_rejects_active_slot_and_allows_cancelled_slot(db_session: AsyncSession):
     """Verify DB partial unique index rejects conflicting active slots even if asyncio.Lock is bypassed."""
     target_date = date.today() + timedelta(days=6)
     slot_start = time(14, 0)
@@ -87,7 +87,7 @@ async def test_database_level_unique_index_prevents_multiprocess_race(db_session
     await db_session.commit()
     b1_id = b1.id
 
-    # Second process inserts conflicting active booking directly without application lock
+    # A direct conflicting insert bypasses the application lock.
     b2 = Booking(
         client_user_id=1,
         master_id=1,

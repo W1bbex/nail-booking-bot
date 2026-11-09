@@ -81,8 +81,11 @@ async def test_client_cannot_cancel_past_deadline(db_session: AsyncSession, monk
 
 
 @pytest.mark.asyncio
-async def test_admin_can_cancel_anytime(db_session: AsyncSession):
-    target_date = date.today() + timedelta(days=1)
+@pytest.mark.parametrize("minutes_before_start", [60, 0])
+async def test_admin_cancels_booking_inside_client_deadline(db_session: AsyncSession, monkeypatch, minutes_before_start):
+    """The client is denied near the visit; the administrator can still cancel it."""
+    target_date = get_moscow_now().date()
+    monkeypatch.setattr("core.booking_service.get_moscow_now", lambda: datetime.combine(target_date, time(14, 0)))
     booking = await create_booking(
         session=db_session,
         client_telegram_id=999000101,
@@ -91,8 +94,17 @@ async def test_admin_can_cancel_anytime(db_session: AsyncSession):
         master_id=1,
         service_id=2,
         booking_date=target_date,
-        start_time=time(12, 0),
+        start_time=time(15, 0),
     )
+
+    cancellation_time = datetime.combine(target_date, time(15, 0)) - timedelta(minutes=minutes_before_start)
+    monkeypatch.setattr("core.booking_service.get_moscow_now", lambda: cancellation_time)
+    with pytest.raises(ValueError, match="не позднее чем за 2 ч"):
+        await cancel_booking(
+            session=db_session, booking_id=booking.id,
+            actor_telegram_id=999000101, is_admin_action=False,
+        )
+    assert booking.status == "pending"
 
     cancelled = await cancel_booking(
         session=db_session,
