@@ -489,7 +489,9 @@ async def handle_services_admin(event: Message | CallbackQuery, state: FSMContex
         await event.answer()
 
     async with get_session() as session:
-        res = await session.execute(select(Service).order_by(Service.category, Service.price))
+        res = await session.execute(
+            select(Service).where(Service.archived_at.is_(None)).order_by(Service.category, Service.price)
+        )
         services = res.scalars().all()
 
     text = (
@@ -699,7 +701,11 @@ async def cb_manual_book_master(call: CallbackQuery) -> None:
     master_id = int(call.data.split(":")[1])
 
     async with get_session() as session:
-        res = await session.execute(select(Service).where(Service.is_active.is_(True)).order_by(Service.category, Service.price))
+        res = await session.execute(
+            select(Service)
+            .where(Service.is_active.is_(True), Service.archived_at.is_(None))
+            .order_by(Service.category, Service.price)
+        )
         services = res.scalars().all()
 
     rows = []
@@ -875,8 +881,16 @@ async def handle_input_manual_client_info(message: Message, state: FSMContext) -
 
     master_id = data.get("master_id")
     service_id = data.get("service_id")
-    b_date = date.fromisoformat(data.get("date"))
-    st_p = [int(x) for x in data.get("time").split(":")]
+    raw_date = data.get("date")
+    raw_time = data.get("time")
+    if service_id is None or not raw_date or not raw_time:
+        await message.answer(
+            "Сессия ручной записи истекла. Пожалуйста, начните оформление заново.",
+            reply_markup=admin_main_keyboard(),
+        )
+        return
+    b_date = date.fromisoformat(raw_date)
+    st_p = [int(x) for x in raw_time.split(":")]
     b_time = time(st_p[0], st_p[1])
 
     async with get_session() as session:
@@ -898,6 +912,7 @@ async def handle_input_manual_client_info(message: Message, state: FSMContext) -
                 booking_date=b_date,
                 start_time=b_time,
                 comment="Создано администратором вручную",
+                ignore_lead_time=True,
             )
             # Auto-confirm manual admin booking
             booking = await confirm_booking(session, booking.id, message.from_user.id)
@@ -1002,7 +1017,7 @@ async def cb_admin_confirm(call: CallbackQuery) -> None:
         try:
             booking = await confirm_booking(session, booking_id, call.from_user.id)
             try:
-                if booking.client_user and booking.client_user.telegram_id:
+                if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
                     bot = call.bot
                     msg = notification_booking_confirmed(booking)
                     await bot.send_message(booking.client_user.telegram_id, msg, parse_mode="HTML")
@@ -1060,7 +1075,7 @@ async def cb_master_claim(call: CallbackQuery) -> None:
             except Exception:
                 pass
 
-            if booking.client_user and booking.client_user.telegram_id and call.bot:
+            if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0 and call.bot:
                 try:
                     c_msg = notification_booking_confirmed(booking)
                     await call.bot.send_message(booking.client_user.telegram_id, c_msg, parse_mode="HTML")
@@ -1133,7 +1148,7 @@ async def cb_master_decline(call: CallbackQuery) -> None:
             await call.answer("Вы отказались от заказа", show_alert=False)
 
             if flow_status == "declined_specific":
-                if booking.client_user and booking.client_user.telegram_id and call.bot:
+                if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0 and call.bot:
                     try:
                         c_text = client_master_declined_message(booking, master_name)
                         c_kb = client_reassign_choice_keyboard(booking.id)
@@ -1172,7 +1187,7 @@ async def cb_master_decline(call: CallbackQuery) -> None:
                 b_text = master_order_broadcast_card(booking)
                 c_kb = master_claim_keyboard(booking.id)
                 for fm in free_masters:
-                    if fm.telegram_id and fm.telegram_id not in settings.admin_telegram_ids:
+                    if fm.telegram_id:
                         try:
                             s_msg = await call.bot.send_message(
                                 chat_id=fm.telegram_id,
@@ -1226,7 +1241,7 @@ async def cb_admin_assign(call: CallbackQuery) -> None:
             from ui.keyboards import master_assigned_keyboard
             booking = await admin_reassign_booking(session, booking_id, new_master_id, call.from_user.id)
 
-            if booking.master and booking.master.telegram_id and booking.master.telegram_id not in settings.admin_telegram_ids and call.bot:
+            if booking.master and booking.master.telegram_id and call.bot:
                 try:
                     m_msg = await call.bot.send_message(
                         chat_id=booking.master.telegram_id,
@@ -1240,7 +1255,7 @@ async def cb_admin_assign(call: CallbackQuery) -> None:
                 except Exception as m_err:
                     logger.warning(f"Failed to notify reassigned master: {m_err}")
 
-            if booking.client_user and booking.client_user.telegram_id and call.bot:
+            if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0 and call.bot:
                 try:
                     c_msg = notification_booking_confirmed(booking)
                     await call.bot.send_message(booking.client_user.telegram_id, c_msg, parse_mode="HTML")
@@ -1283,7 +1298,7 @@ async def cb_admin_cancel(call: CallbackQuery) -> None:
                 is_admin_action=True,
             )
             try:
-                if booking.client_user and booking.client_user.telegram_id:
+                if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
                     bot = call.bot
                     msg = notification_booking_cancelled(booking, "admin")
                     await bot.send_message(booking.client_user.telegram_id, msg, parse_mode="HTML")

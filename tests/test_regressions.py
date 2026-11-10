@@ -1092,3 +1092,114 @@ async def test_create_booking_min_lead_time_enforcement(db_session: AsyncSession
     assert admin_booking.id is not None
     assert admin_booking.start_time == time(12, 30)
 
+
+@pytest.mark.asyncio
+async def test_backup_closes_source_on_dest_error(tmp_path, monkeypatch):
+    import sqlite3
+    from core.backup import backup_sqlite_database
+    db = tmp_path / "test.db"
+    db.write_bytes(b"SQLite format 3\x00")
+    
+    orig_connect = sqlite3.connect
+    calls = []
+    def mock_connect(path, *args, **kwargs):
+        if "studio_" in str(path):
+            raise OSError("destination access error")
+        conn = orig_connect(path, *args, **kwargs)
+        calls.append((path, conn))
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", mock_connect)
+    res = backup_sqlite_database(db_path=db, backup_dir=tmp_path / "backups")
+    assert res is None
+    # Verify src_conn was closed despite dest_conn error
+    for path, conn in calls:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            conn.execute("SELECT 1")
+
+
+def test_cors_headers_contain_standard_web_headers():
+    from api.app import app
+    from starlette.middleware.cors import CORSMiddleware
+    for middleware in app.user_middleware:
+        if middleware.cls is CORSMiddleware:
+            headers = middleware.kwargs.get("allow_headers", [])
+            assert "Accept" in headers
+            assert "Accept-Language" in headers
+            break
+    else:
+        pytest.fail("CORSMiddleware not found")
+
+
+@pytest.mark.asyncio
+async def test_any_master_walk_in_respects_ignore_lead_time(db_session: AsyncSession, monkeypatch):
+    target_date = date.today()
+    now_fixed = datetime.combine(target_date, time(12, 10))
+    monkeypatch.setattr("core.booking_service.get_moscow_now", lambda: now_fixed)
+
+    # Walk-in booking for "Any master" (master_id=0) within 20 min with ignore_lead_time=True must succeed
+    booking = await create_booking(
+        session=db_session,
+        client_telegram_id=999000101,
+        client_name="Экспресс Любой Мастер",
+        client_phone="+79991112233",
+        master_id=0,
+        service_id=2,
+        booking_date=target_date,
+        start_time=time(12, 30),
+        ignore_lead_time=True,
+    )
+    assert booking.id is not None
+    assert booking.is_any_master is True
+    assert booking.master_id in (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_decline_any_master_returns_all_declined_when_no_masters_left(db_session: AsyncSession):
+    from core.booking_service import decline_booking_by_master
+    from core.models import Master
+
+    m1 = await db_session.get(Master, 1)
+    m2 = await db_session.get(Master, 2)
+    m1.telegram_id = 777001
+    m2.telegram_id = 777002
+    await db_session.commit()
+
+    target_date = date.today() + timedelta(days=4)
+    booking = await create_booking(
+        session=db_session,
+        client_telegram_id=999000101,
+        client_name="Клиент Отказ Всех",
+        client_phone="+79990001122",
+        master_id=0,
+        service_id=2,
+        booking_date=target_date,
+        start_time=time(15, 0),
+    )
+    first_master_tg = 777001 if booking.master_id == 1 else 777002
+    second_master_tg = 777002 if booking.master_id == 1 else 777001
+
+    ok1, status1, b1 = await decline_booking_by_master(db_session, booking.id, first_master_tg)
+    assert ok1 is True
+    assert status1 == "declined_any"
+
+    ok2, status2, b2 = await decline_booking_by_master(db_session, booking.id, second_master_tg)
+    assert ok2 is True
+    assert status2 == "all_declined"
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_blocked_when_external_x_forwarded_for_present(client: AsyncClient, monkeypatch):
+    from core.config import settings
+    monkeypatch.setattr(settings, "bot_token", "987654321:ValidLookingBotTokenSecret")
+    res = await client.get(
+        "/api/me",
+        headers={
+            "X-Dev-User-Id": "5568814893",
+            "X-Forwarded-For": "203.0.113.50",
+        },
+    )
+    assert res.status_code == 401
+
+
+

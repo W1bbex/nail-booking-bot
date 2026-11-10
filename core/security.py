@@ -13,11 +13,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.database import get_db
 from core.logger import setup_logger
-from core.models import User
+from core.models import Master, User
 
 logger = setup_logger("security")
 
 MAX_AUTH_AGE_SECONDS = 86400  # 24 hours
+
+
+def _is_proxied_external(x_forwarded_for: Optional[str], x_real_ip: Optional[str]) -> bool:
+    for raw in (x_forwarded_for, x_real_ip):
+        if isinstance(raw, str) and raw.strip():
+            ip = raw.split(",")[0].strip().lower()
+            if ip not in ("127.0.0.1", "::1", "localhost", "testclient"):
+                return True
+    return False
+
 
 
 def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any]:
@@ -57,14 +67,17 @@ def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any
 async def get_current_user(
     x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
     x_dev_user_id: Optional[str] = Header(None, alias="X-Dev-User-Id"),
+    x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For"),
+    x_real_ip: Optional[str] = Header(None, alias="X-Real-IP"),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     telegram_id: Optional[int] = None
     full_name: str = "Гость студии"
 
-    # 1. Dev Mode fallback for browser preview
+    # 1. Dev Mode fallback for local browser preview (never allowed via external reverse proxy)
     init_data_str = x_telegram_init_data if isinstance(x_telegram_init_data, str) else None
-    if settings.dev_mode and (not init_data_str or init_data_str.startswith("dev")):
+    is_external_proxy = _is_proxied_external(x_forwarded_for, x_real_ip)
+    if settings.dev_mode and not is_external_proxy and (not init_data_str or init_data_str.startswith("dev")):
         if x_dev_user_id and x_dev_user_id.isdigit():
             telegram_id = int(x_dev_user_id)
             full_name = f"Тестовый пользователь #{telegram_id}"
@@ -127,8 +140,11 @@ async def get_current_user(
                 await db.commit()
                 await db.refresh(user)
         elif user.role == "admin":
-            # Demoted from admin back to client
-            user.role = "client"
+            # Demoted from admin: restore master role if bound to an active Master, otherwise client
+            bound_master = (await db.execute(
+                select(Master).where(Master.telegram_id == telegram_id, Master.archived_at.is_(None))
+            )).scalar_one_or_none()
+            user.role = "master" if bound_master else "client"
             await db.commit()
             await db.refresh(user)
 

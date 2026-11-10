@@ -201,7 +201,7 @@ async def api_create_booking(
                     broadcast_text = master_order_broadcast_card(full_booking)
                     claim_kb = master_claim_keyboard(full_booking.id)
                     for fm in free_masters:
-                        if fm.telegram_id and fm.telegram_id not in settings.admin_telegram_ids:
+                        if fm.telegram_id:
                             try:
                                 s_msg = await telegram_bot_instance.send_message(
                                     chat_id=fm.telegram_id,
@@ -218,7 +218,7 @@ async def api_create_booking(
                                 )
                             except Exception as m_err:
                                 logger.warning(f"Failed to broadcast to master {fm.full_name}: {m_err}")
-                elif full_booking.master and full_booking.master.telegram_id and full_booking.master.telegram_id not in settings.admin_telegram_ids:
+                elif full_booking.master and full_booking.master.telegram_id:
                     # Alert specifically chosen master
                     from ui.dashboards import master_assigned_card
                     from ui.keyboards import master_assigned_keyboard
@@ -240,7 +240,7 @@ async def api_create_booking(
                         logger.warning(f"Failed to alert assigned master: {m_err}")
 
                 # 3. Send instant receipt/confirmation directly to the client
-                if current_user and current_user.telegram_id:
+                if current_user and current_user.telegram_id and current_user.telegram_id > 0:
                     try:
                         client_msg = notification_client_booking_created(full_booking)
                         await telegram_bot_instance.send_message(
@@ -352,5 +352,7 @@ async def api_cancel_booking(
             "status": booking.status,
             "message": "Запись успешно отменена",
         }
-    except (ValueError, PermissionError) as e:
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

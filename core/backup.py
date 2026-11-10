@@ -65,11 +65,13 @@ def backup_sqlite_database(
     try:
         # sqlite3 native online backup
         src_conn = sqlite3.connect(str(src_file))
-        dst_conn = sqlite3.connect(str(dest_file))
         try:
-            src_conn.backup(dst_conn)
+            dst_conn = sqlite3.connect(str(dest_file))
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
         finally:
-            dst_conn.close()
             src_conn.close()
 
         logger.info(

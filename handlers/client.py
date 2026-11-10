@@ -42,7 +42,10 @@ async def handle_start(message: Message) -> None:
                 username=message.from_user.username,
             )
 
-    if bound_master:
+    if bound_master and is_admin:
+        from ui.dashboards import master_start_dashboard
+        text = f"{start_dashboard(is_admin=True)}\n\n{master_start_dashboard(bound_master.full_name)}"
+    elif bound_master:
         from ui.dashboards import master_start_dashboard
         text = master_start_dashboard(bound_master.full_name)
     else:
@@ -280,7 +283,7 @@ async def cb_client_accept_any(call: CallbackQuery) -> None:
                 b_text = master_order_broadcast_card(booking)
                 c_kb = master_claim_keyboard(booking.id)
                 for fm in free_masters:
-                    if fm.telegram_id and fm.telegram_id not in settings.admin_telegram_ids:
+                    if fm.telegram_id:
                         try:
                             s_msg = await call.bot.send_message(
                                 chat_id=fm.telegram_id,

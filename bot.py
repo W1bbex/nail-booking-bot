@@ -137,13 +137,14 @@ async def main() -> None:
     stop_task = asyncio.create_task(stop_event.wait())
     watchdog_task = asyncio.create_task(booking_watchdog_loop(bot, stop_event))
     backup_task = asyncio.create_task(database_backup_loop(stop_event))
-    wait_tasks = [server_task, stop_task, watchdog_task, backup_task]
+    core_tasks = [server_task, stop_task]
     if bot_task:
-        wait_tasks.append(bot_task)
+        core_tasks.append(bot_task)
+    all_tasks = core_tasks + [watchdog_task, backup_task]
 
     try:
         done, pending = await asyncio.wait(
-            wait_tasks,
+            core_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -151,10 +152,10 @@ async def main() -> None:
     finally:
         logger.info("Shutting down services...")
         server.should_exit = True
-        for t in wait_tasks:
+        for t in all_tasks:
             if not t.done():
                 t.cancel()
-        await asyncio.gather(*wait_tasks, return_exceptions=True)
+        await asyncio.gather(*all_tasks, return_exceptions=True)
         if bot:
             try:
                 await bot.session.close()

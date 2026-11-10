@@ -37,7 +37,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Dev-User-Id", "Authorization"],
+    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Dev-User-Id", "Authorization", "Accept", "Accept-Language"],
 )
 
 # Mount API routers

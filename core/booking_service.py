@@ -83,6 +83,7 @@ async def get_available_slots(
     target_date: date,
     now_override: Optional[datetime] = None,
     include_unavailable: bool = False,
+    ignore_lead_time: bool = False,
 ) -> List[Dict[str, Any]]:
     # If master_id is 0 or None, find slots across ANY active master ("Любой мастер")
     if not master_id:
@@ -99,6 +100,7 @@ async def get_available_slots(
                 target_date=target_date,
                 now_override=now_override,
                 include_unavailable=include_unavailable,
+                ignore_lead_time=ignore_lead_time,
             )
             for s in m_slots:
                 st = s["start_time"]
@@ -170,7 +172,7 @@ async def get_available_slots(
     if target_date < current_dt.date():
         return []
     is_today = (target_date == current_dt.date())
-    min_lead_minutes = int(settings.booking.get("min_lead_minutes", 30))
+    min_lead_minutes = 0 if ignore_lead_time else int(settings.booking.get("min_lead_minutes", 30))
 
     slots = []
     cursor_dt = datetime.combine(target_date, work_start)
@@ -263,6 +265,7 @@ async def create_booking(
                     master_id=cand.id,
                     service_id=service_id,
                     target_date=booking_date,
+                    ignore_lead_time=ignore_lead_time,
                 )
                 if any(s["start_time"] == st_str for s in cand_slots):
                     chosen_master = cand
@@ -1169,6 +1172,9 @@ async def decline_booking_by_master(
                 booking.master_id = other_free[0].id
             await session.commit()
             await session.refresh(booking)
+            if not other_free:
+                logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). No other free masters left.")
+                return True, "all_declined", booking
             logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). Status: pending.")
             return True, "declined_any", booking
         else:
@@ -1536,7 +1542,7 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
                         except Exception:
                             pass
                     # Notify client
-                    if b.client_user and b.client_user.telegram_id:
+                    if b.client_user and b.client_user.telegram_id and b.client_user.telegram_id > 0:
                         try:
                             c_text = notification_booking_confirmed(b)
                             await bot.send_message(b.client_user.telegram_id, c_text, parse_mode="HTML")
