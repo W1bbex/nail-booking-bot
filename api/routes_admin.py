@@ -6,20 +6,22 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from core.booking_notifier import sync_booking_messages
 from core.booking_service import (
-    block_time_interval,
     cancel_booking,
     complete_booking,
     confirm_booking,
     create_booking,
+    get_moscow_now,
+)
+from core.catalog_service import (
+    block_time_interval,
     create_master,
     create_service,
     delete_master,
     delete_service,
     get_all_masters,
     get_all_services,
-    get_moscow_now,
-    sync_booking_messages,
     toggle_master_active,
     toggle_service_active,
     unblock_time_interval,

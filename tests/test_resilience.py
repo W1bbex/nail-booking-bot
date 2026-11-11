@@ -147,7 +147,7 @@ async def test_security_auto_register_handles_integrity_error():
 @pytest.mark.asyncio
 async def test_admin_claim_not_registered_does_not_edit_message():
     """Verify unauthorized master claims do not overwrite or erase public broadcast cards."""
-    from handlers.admin import cb_master_claim
+    from handlers.master import cb_master_claim
 
     call = MagicMock()
     call.from_user.id = 12345
@@ -157,7 +157,7 @@ async def test_admin_claim_not_registered_does_not_edit_message():
 
     with patch("core.booking_service.claim_booking_by_master", new_callable=AsyncMock) as mock_claim:
         mock_claim.return_value = (False, "Вы не зарегистрированы как мастер студии", None)
-        with patch("handlers.admin.get_session") as mock_maker:
+        with patch("handlers.master.get_session") as mock_maker:
             mock_session = AsyncMock()
             mock_maker.return_value.__aenter__.return_value = mock_session
 

@@ -5,7 +5,7 @@ from fastapi import HTTPException
 import pytest
 import pytest_asyncio
 
-from core import booking_service
+from core import booking_service, catalog_service
 from core.config import settings
 from core.models import Master, User
 from core.security import require_admin
@@ -47,7 +47,7 @@ async def permission_data(db_session, tmp_path, monkeypatch):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"salon": salon}), encoding="utf-8")
     monkeypatch.setattr(settings, "salon", salon.copy())
-    monkeypatch.setattr(booking_service, "CONFIG_PATH", config)
+    monkeypatch.setattr(catalog_service, "CONFIG_PATH", config)
     master_user = User(telegram_id=MASTER_ID, full_name="Test master", role="master", is_active=True)
     db_session.add(master_user)
     await db_session.commit()

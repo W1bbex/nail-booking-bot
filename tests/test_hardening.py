@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.backup import backup_sqlite_database, cleanup_old_backups, get_backup_stats
-from core.booking_service import create_booking, get_moscow_now, update_service_price
+from core.booking_service import create_booking, get_moscow_now
+from core.catalog_service import update_service_price
 from core.config import settings
 from core.models import Booking, Master, Service, User
 

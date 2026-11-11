@@ -6,14 +6,13 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from core.booking_notifier import record_booking_message, sync_booking_messages
 from core.booking_service import (
     cancel_booking,
     create_booking,
     get_available_slots,
-    get_free_active_masters,
-    record_booking_message,
-    sync_booking_messages,
 )
+from core.catalog_service import get_free_active_masters
 from core.config import settings
 from core.database import get_db
 from core.logger import setup_logger

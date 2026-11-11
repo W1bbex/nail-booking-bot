@@ -5,7 +5,8 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
-from core.booking_service import cancel_booking, sync_booking_messages
+from core.booking_service import cancel_booking
+from core.booking_notifier import sync_booking_messages
 from core.config import settings
 from core.database import get_session
 from core.logger import setup_logger
@@ -35,7 +36,7 @@ async def handle_start(message: Message) -> None:
     bound_master = None
     if message.from_user and message.from_user.username:
         async with get_session() as session:
-            from core.booking_service import bind_master_by_telegram
+            from core.catalog_service import bind_master_by_telegram
             bound_master = await bind_master_by_telegram(
                 session=session,
                 telegram_id=message.from_user.id,
@@ -252,12 +253,9 @@ async def cb_client_accept_any(call: CallbackQuery) -> None:
     parts = call.data.split(":")
     booking_id = int(parts[1])
     async with get_session() as session:
-        from core.booking_service import (
-            client_accept_any_master,
-            get_free_active_masters,
-            record_booking_message,
-            sync_booking_messages,
-        )
+        from core.booking_notifier import record_booking_message, sync_booking_messages
+        from core.booking_service import client_accept_any_master
+        from core.catalog_service import get_free_active_masters
         from ui.dashboards import master_order_broadcast_card
         from ui.keyboards import master_claim_keyboard
         try:

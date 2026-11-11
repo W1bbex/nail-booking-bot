@@ -2,7 +2,8 @@ from datetime import date, datetime, time, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.booking_service import block_time_interval, create_booking, get_available_slots
+from core.booking_service import create_booking, get_available_slots
+from core.catalog_service import block_time_interval
 
 
 @pytest.mark.asyncio

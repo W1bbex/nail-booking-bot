@@ -3,7 +3,7 @@ from datetime import date, time, timedelta
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.booking_service import _mask_phone, create_booking
 from core.models import Booking
@@ -19,19 +19,23 @@ async def test_concurrent_double_booking_prevention(db_session: AsyncSession):
     results = []
     errors = []
 
+    # Use an independent AsyncSession per concurrent task bound to the same engine
+    session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
     async def attempt_booking(client_id: int, client_name: str):
         try:
-            b = await create_booking(
-                session=db_session,
-                client_telegram_id=client_id,
-                client_name=client_name,
-                client_phone=f"+7999000{client_id}",
-                master_id=master_id,
-                service_id=service_id,
-                booking_date=target_date,
-                start_time=booking_time,
-            )
-            results.append(b)
+            async with session_factory() as session:
+                b = await create_booking(
+                    session=session,
+                    client_telegram_id=client_id,
+                    client_name=client_name,
+                    client_phone=f"+7999000{client_id}",
+                    master_id=master_id,
+                    service_id=service_id,
+                    booking_date=target_date,
+                    start_time=booking_time,
+                )
+                results.append(b)
         except ValueError as e:
             errors.append(str(e))
 
@@ -132,3 +136,77 @@ def test_pii_phone_masking_in_logs():
     assert "123" not in masked
     assert "45" not in masked
     assert masked == "+79***67"
+
+
+@pytest.mark.asyncio
+async def test_expired_bookings_releases_lock_before_network_io(db_session: AsyncSession):
+    from unittest.mock import AsyncMock, MagicMock
+    from datetime import datetime, timezone
+    from core.booking_service import process_expired_bookings, _booking_lock
+
+    target_date = date.today() + timedelta(days=2)
+    b = Booking(
+        client_user_id=1,
+        master_id=1,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(10, 0),
+        end_time=time(11, 0),
+        price=1000.0,
+        status="pending",
+        client_name="Timeout Client",
+        client_phone="+79991112233",
+        assignment_deadline=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    db_session.add(b)
+    await db_session.commit()
+
+    lock_held_during_io = []
+
+    mock_bot = MagicMock()
+
+    async def fake_send_message(*args, **kwargs):
+        lock_held_during_io.append(_booking_lock.locked())
+        return MagicMock(message_id=999)
+
+    mock_bot.send_message = AsyncMock(side_effect=fake_send_message)
+    mock_bot.edit_message_text = AsyncMock(return_value=MagicMock())
+
+    count = await process_expired_bookings(db_session, mock_bot)
+    assert count >= 1
+    assert len(lock_held_during_io) > 0, "Expected network calls to have been made"
+    assert not any(lock_held_during_io), "Network I/O must NOT be executed while _booking_lock is held!"
+
+
+@pytest.mark.asyncio
+async def test_expired_bookings_logs_notification_errors(db_session: AsyncSession, caplog):
+    import logging
+    from unittest.mock import AsyncMock, MagicMock
+    from datetime import datetime, timezone
+    from core.booking_service import process_expired_bookings
+
+    target_date = date.today() + timedelta(days=3)
+    b = Booking(
+        client_user_id=1,
+        master_id=1,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(11, 0),
+        end_time=time(12, 0),
+        price=1000.0,
+        status="pending",
+        client_name="Error Client",
+        client_phone="+79991112233",
+        assignment_deadline=datetime.now(timezone.utc) - timedelta(minutes=10),
+    )
+    db_session.add(b)
+    await db_session.commit()
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock(side_effect=RuntimeError("Telegram API down"))
+    mock_bot.edit_message_text = AsyncMock(return_value=MagicMock())
+
+    with caplog.at_level(logging.ERROR):
+        count = await process_expired_bookings(db_session, mock_bot)
+        assert count >= 1
+        assert any("Telegram API down" in record.message or "Failed" in record.message for record in caplog.records)
