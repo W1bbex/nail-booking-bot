@@ -4,7 +4,7 @@ import os
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -56,6 +56,7 @@ def update_salon_settings(salon_data: Dict[str, Any]) -> Dict[str, Any]:
 async def _get_masters_sorted_by_daily_load(
     session: AsyncSession,
     target_date: date,
+    exclude_booking_id: Optional[int] = None,
 ) -> List[Master]:
     masters_res = await session.execute(
         select(Master)
@@ -66,14 +67,15 @@ async def _get_masters_sorted_by_daily_load(
     if not active_masters:
         return []
 
-    counts_res = await session.execute(
-        select(Booking.master_id, func.count(Booking.id))
-        .where(
-            Booking.booking_date == target_date,
-            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-        )
-        .group_by(Booking.master_id)
+    count_stmt = select(Booking.master_id, func.count(Booking.id)).where(
+        Booking.booking_date == target_date,
+        Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+        not_(and_(Booking.is_any_master.is_(True), Booking.status == "pending")),
     )
+    if exclude_booking_id is not None:
+        count_stmt = count_stmt.where(Booking.id != exclude_booking_id)
+
+    counts_res = await session.execute(count_stmt.group_by(Booking.master_id))
     load_map = {row[0]: int(row[1]) for row in counts_res.fetchall()}
     active_masters.sort(key=lambda m: (load_map.get(m.id, 0), m.id))
     return active_masters
@@ -85,25 +87,31 @@ async def get_free_active_masters(
     start_time: time,
     end_time: time,
     exclude_ids: Optional[List[int]] = None,
+    exclude_booking_id: Optional[int] = None,
 ) -> List[Master]:
     exclude_set = set(exclude_ids or [])
-    all_sorted = await _get_masters_sorted_by_daily_load(session, booking_date)
+    all_sorted = await _get_masters_sorted_by_daily_load(
+        session, booking_date, exclude_booking_id=exclude_booking_id
+    )
     free_masters = []
 
     for m in all_sorted:
         if m.id in exclude_set or not m.is_active or m.archived_at is not None:
             continue
 
-        # Check conflicting bookings
-        conflict = (await session.execute(
-            select(Booking).where(
-                Booking.master_id == m.id,
-                Booking.booking_date == booking_date,
-                Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-                Booking.start_time < end_time,
-                Booking.end_time > start_time,
-            )
-        )).scalars().first()
+        # Check conflicting bookings (ignore unassigned any-master pending reservation or excluded booking)
+        conflict_stmt = select(Booking).where(
+            Booking.master_id == m.id,
+            Booking.booking_date == booking_date,
+            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+            Booking.start_time < end_time,
+            Booking.end_time > start_time,
+            not_(and_(Booking.is_any_master.is_(True), Booking.status == "pending")),
+        )
+        if exclude_booking_id is not None:
+            conflict_stmt = conflict_stmt.where(Booking.id != exclude_booking_id)
+
+        conflict = (await session.execute(conflict_stmt)).scalars().first()
         if conflict:
             continue
 

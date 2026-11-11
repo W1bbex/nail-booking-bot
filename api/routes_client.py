@@ -195,7 +195,11 @@ async def api_create_booking(
                     from ui.dashboards import master_order_broadcast_card
                     from ui.keyboards import master_claim_keyboard
                     free_masters = await get_free_active_masters(
-                        db, full_booking.booking_date, full_booking.start_time, full_booking.end_time
+                        db,
+                        full_booking.booking_date,
+                        full_booking.start_time,
+                        full_booking.end_time,
+                        exclude_booking_id=full_booking.id,
                     )
                     broadcast_text = master_order_broadcast_card(full_booking)
                     claim_kb = master_claim_keyboard(full_booking.id)

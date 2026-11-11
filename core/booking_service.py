@@ -273,9 +273,10 @@ async def create_booking(
         ):
             raise ValueError("Выбранное время выходит за рамки рабочего графика студии")
 
-        # Check slot step alignment (e.g. 30 min) and seconds
+        # Check slot step alignment relative to working day start (e.g. 30 or 45 min) and seconds
         slot_step = int(settings.booking.get("slot_step_minutes", 30))
-        if start_time.minute % slot_step != 0 or start_time.second != 0:
+        offset_minutes = (start_time.hour - start_hour) * 60 + start_time.minute
+        if offset_minutes < 0 or offset_minutes % slot_step != 0 or start_time.second != 0:
             raise ValueError(f"Время записи должно быть кратно шагу слота ({slot_step} мин)")
 
         # Check past date/time, minimum lead time, and booking horizon limit
@@ -626,7 +627,12 @@ async def decline_booking_by_master(
             booking.status = "pending"
             booking.assignment_deadline = calculate_assignment_deadline(booking.booking_date)
             other_free = await get_free_active_masters(
-                session, booking.booking_date, booking.start_time, booking.end_time, exclude_ids=cur_declined
+                session,
+                booking.booking_date,
+                booking.start_time,
+                booking.end_time,
+                exclude_ids=cur_declined,
+                exclude_booking_id=booking.id,
             )
             if other_free:
                 booking.master_id = other_free[0].id
@@ -668,6 +674,9 @@ async def client_accept_any_master(
         if not booking.client_user or booking.client_user.telegram_id != client_telegram_id:
             return False, "Действие доступно только клиенту данной записи", None
 
+        if booking.status != "awaiting_client_choice":
+            return False, f"Нельзя перевести запись в поиск мастера из статуса '{booking.status}'", booking
+
         booking.is_any_master = True
         booking.status = "pending"
         booking.client_reassign_deadline = None
@@ -675,7 +684,12 @@ async def client_accept_any_master(
 
         cur_declined = [int(x) for x in (booking.declined_master_ids or "").split(",") if x.strip().isdigit()]
         other_free = await get_free_active_masters(
-            session, booking.booking_date, booking.start_time, booking.end_time, exclude_ids=cur_declined
+            session,
+            booking.booking_date,
+            booking.start_time,
+            booking.end_time,
+            exclude_ids=cur_declined,
+            exclude_booking_id=booking.id,
         )
         if other_free:
             booking.master_id = other_free[0].id
@@ -782,7 +796,12 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
             b.assignment_deadline = calculate_assignment_deadline(b.booking_date)
             cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
             other_free = await get_free_active_masters(
-                session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
+                session,
+                b.booking_date,
+                b.start_time,
+                b.end_time,
+                exclude_ids=cur_declined,
+                exclude_booking_id=b.id,
             )
             if other_free:
                 b.master_id = other_free[0].id
@@ -820,7 +839,12 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
         for b in pending_list:
             cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
             other_free = await get_free_active_masters(
-                session, b.booking_date, b.start_time, b.end_time, exclude_ids=cur_declined
+                session,
+                b.booking_date,
+                b.start_time,
+                b.end_time,
+                exclude_ids=cur_declined,
+                exclude_booking_id=b.id,
             )
 
             if auto_assign_enabled and other_free:

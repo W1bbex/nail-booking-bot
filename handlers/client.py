@@ -276,7 +276,12 @@ async def cb_client_accept_any(call: CallbackQuery) -> None:
                     int(x) for x in (booking.declined_master_ids or "").split(",") if x.strip().isdigit()
                 ]
                 free_masters = await get_free_active_masters(
-                    session, booking.booking_date, booking.start_time, booking.end_time, exclude_ids=declined_ids
+                    session,
+                    booking.booking_date,
+                    booking.start_time,
+                    booking.end_time,
+                    exclude_ids=declined_ids,
+                    exclude_booking_id=booking.id,
                 )
                 b_text = master_order_broadcast_card(booking)
                 c_kb = master_claim_keyboard(booking.id)

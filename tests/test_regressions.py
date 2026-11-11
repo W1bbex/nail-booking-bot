@@ -763,4 +763,81 @@ async def test_decline_any_master_returns_all_declined_when_no_masters_left(db_s
     assert status2 == "all_declined"
 
 
+@pytest.mark.asyncio
+async def test_any_master_does_not_exclude_its_own_reservation(db_session: AsyncSession, monkeypatch):
+    from core.booking_service import get_moscow_now, process_expired_bookings
+    from core.catalog_service import get_free_active_masters
+    from core.config import settings
+    from core.models import Master
+
+    m2 = await db_session.get(Master, 2)
+    if m2:
+        m2.is_active = False
+        await db_session.commit()
+
+    monkeypatch.setattr(settings, "salon", {**settings.salon, "auto_assign_on_timeout": True})
+    target_date = get_moscow_now().date() + timedelta(days=3)
+    booking = await create_booking(
+        session=db_session,
+        client_telegram_id=441122,
+        client_name="Client",
+        client_phone="+79990000000",
+        master_id=0,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(12, 0),
+    )
+    free = await get_free_active_masters(
+        db_session, booking.booking_date, booking.start_time, booking.end_time
+    )
+    recipients = [master.id for master in free]
+    booking.assignment_deadline = datetime(2000, 1, 1)
+    await db_session.commit()
+    await process_expired_bookings(db_session, None)
+    assert {"recipients": recipients, "status": booking.status} == {"recipients": [1], "status": "confirmed"}
+
+
+@pytest.mark.asyncio
+async def test_stale_client_button_cannot_resurrect_cancelled_booking(db_session: AsyncSession):
+    from core.booking_service import client_accept_any_master, get_moscow_now
+
+    target_date = get_moscow_now().date() + timedelta(days=3)
+    booking = await create_booking(
+        session=db_session,
+        client_telegram_id=441122,
+        client_name="Client",
+        client_phone="+79990000000",
+        master_id=1,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(12, 0),
+    )
+    await cancel_booking(db_session, booking.id, 441122)
+    accepted, _, updated_booking = await client_accept_any_master(db_session, booking.id, 441122)
+    assert (accepted, updated_booking.status) == (False, "cancelled_by_client")
+
+
+@pytest.mark.asyncio
+async def test_slot_offered_with_45_minute_step_can_be_booked(db_session: AsyncSession, monkeypatch):
+    from core.booking_service import get_moscow_now
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "booking", {**settings.booking, "slot_step_minutes": 45})
+    day = get_moscow_now().date() + timedelta(days=3)
+    slots = await get_available_slots(db_session, 1, 1, day)
+    assert "11:30" in [slot["start_time"] for slot in slots]
+    booking = await create_booking(
+        session=db_session,
+        client_telegram_id=441122,
+        client_name="Client",
+        client_phone="+79990000000",
+        master_id=1,
+        service_id=1,
+        booking_date=day,
+        start_time=time(11, 30),
+    )
+    assert booking.start_time == time(11, 30)
+
+
+
 
