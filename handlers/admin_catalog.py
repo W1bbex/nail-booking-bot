@@ -312,13 +312,13 @@ async def cb_admin_unblock_item(call: CallbackQuery) -> None:
             await call.answer(f"Ошибка: {e}", show_alert=True)
 
 
-@admin_catalog_router.message(F.text.regexp(r"^/unblock_(\d+)$"))
+@admin_catalog_router.message(F.text.regexp(r"^/unblock_(\d+)(?:@\w+)?$"))
 async def handle_unblock_id_cmd(message: Message) -> None:
     if not check_admin(message.from_user.id):
         await message.answer("Доступ ограничен.")
         return
 
-    m = re.match(r"^/unblock_(\d+)$", message.text.strip())
+    m = re.match(r"^/unblock_(\d+)(?:@\w+)?$", message.text.strip())
     if not m:
         return
     block_id = int(m.group(1))
@@ -494,6 +494,12 @@ async def handle_input_service_price(message: Message, state: FSMContext) -> Non
     data = await state.get_data()
     service_id = data.get("service_id")
     await state.clear()
+    if not service_id:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="К списку услуг", callback_data="admin:services", style="primary")]
+        ])
+        await message.answer("Сессия ввода цены истекла. Пожалуйста, выберите услугу заново.", reply_markup=kb)
+        return
 
     async with get_session() as session:
         try:

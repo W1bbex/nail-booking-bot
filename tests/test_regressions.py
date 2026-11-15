@@ -8,9 +8,9 @@ from core.booking_service import (
     cancel_booking,
     confirm_booking,
     create_booking,
-    get_available_slots,
 )
 from core.models import Booking
+from core.slot_service import get_available_slots
 
 
 @pytest.mark.asyncio
@@ -117,6 +117,7 @@ async def test_admin_block_invalid_time_returns_400_not_500(client: AsyncClient)
 async def test_client_booking_receipt_and_admin_cancellation_notifications(
     client: AsyncClient,
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from unittest.mock import AsyncMock, MagicMock
     import api.routes_client as routes_client
@@ -126,7 +127,7 @@ async def test_client_booking_receipt_and_admin_cancellation_notifications(
     # Mock telegram bot
     mock_bot = MagicMock()
     mock_bot.send_message = AsyncMock()
-    routes_client.telegram_bot_instance = mock_bot
+    monkeypatch.setattr(routes_client, "telegram_bot_instance", mock_bot)
 
     target_date = (date.today() + timedelta(days=4)).strftime("%Y-%m-%d")
 
@@ -261,13 +262,26 @@ async def test_any_master_booking_flow(client: AsyncClient):
     assert data["master"]["full_name"]
 
 
-def test_admin_router_handlers_registered():
-    from handlers.admin import admin_router
-    # Verify router has registered message and callback query handlers (including modular sub-routers)
-    total_msg = len(admin_router.message.handlers) + sum(len(r.message.handlers) for r in admin_router.sub_routers)
-    total_cb = len(admin_router.callback_query.handlers) + sum(len(r.callback_query.handlers) for r in admin_router.sub_routers)
-    assert total_msg >= 7
-    assert total_cb >= 15
+@pytest.mark.asyncio
+async def test_admin_booking_cmd_with_botname_suffix(db_session, monkeypatch):
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock, MagicMock
+    from handlers.admin import handle_booking_id_cmd
+
+    @asynccontextmanager
+    async def mock_get_session():
+        yield db_session
+
+    monkeypatch.setattr("handlers.admin.get_session", mock_get_session)
+
+    msg = MagicMock()
+    msg.text = "/booking_999@salon_booking_bot"
+    msg.from_user.id = 5568814893
+    msg.answer = AsyncMock()
+
+    await handle_booking_id_cmd(msg)
+    msg.answer.assert_called_once()
+    assert "999 не найдена" in msg.answer.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -788,7 +802,7 @@ async def test_any_master_does_not_exclude_its_own_reservation(db_session: Async
         start_time=time(12, 0),
     )
     free = await get_free_active_masters(
-        db_session, booking.booking_date, booking.start_time, booking.end_time
+        db_session, booking.booking_date, booking.start_time, booking.end_time, exclude_booking_id=booking.id
     )
     recipients = [master.id for master in free]
     booking.assignment_deadline = datetime(2000, 1, 1)

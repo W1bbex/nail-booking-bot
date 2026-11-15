@@ -1,18 +1,21 @@
 from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional
+from aiogram import Bot
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from core.booking_notifier import record_booking_message, sync_booking_messages
+from api.dependencies import get_bot
+
+from notifiers.booking_notifier import record_booking_message, sync_booking_messages
 from core.booking_service import (
     cancel_booking,
     create_booking,
-    get_available_slots,
 )
 from core.catalog_service import get_free_active_masters
+from core.slot_service import get_available_slots
 from core.config import settings
 from core.database import get_db
 from core.logger import setup_logger
@@ -55,13 +58,23 @@ async def get_salon_info() -> Dict[str, Any]:
 
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    master_query = select(Master).where(
+        Master.telegram_id == current_user.telegram_id,
+        Master.archived_at.is_(None),
+    ).order_by(Master.id.desc())
+    master = (await db.execute(master_query)).scalars().first()
     return {
         "telegram_id": current_user.telegram_id,
         "full_name": current_user.full_name,
         "phone": current_user.phone,
         "role": current_user.role,
         "is_admin": settings.is_admin(current_user.telegram_id),
+        "is_master": master is not None,
+        "master_id": master.id if master else None,
     }
 
 
@@ -133,6 +146,7 @@ async def api_create_booking(
     payload: BookingCreateRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         b_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
@@ -163,15 +177,14 @@ async def api_create_booking(
         full_booking = res.scalar_one_or_none() or booking
 
         # Notify salon admins via Telegram Bot if running
-        global telegram_bot_instance
-        if telegram_bot_instance and full_booking:
+        if bot and full_booking:
             try:
                 # 1. Alert salon admins with interactive action keyboard
                 msg_text = notification_new_booking(full_booking)
                 kb = admin_notification_keyboard(full_booking.id)
                 for admin_id in settings.admin_telegram_ids:
                     try:
-                        sent_msg = await telegram_bot_instance.send_message(
+                        sent_msg = await bot.send_message(
                             chat_id=admin_id,
                             text=msg_text,
                             reply_markup=kb,
@@ -206,7 +219,7 @@ async def api_create_booking(
                     for fm in free_masters:
                         if fm.telegram_id:
                             try:
-                                s_msg = await telegram_bot_instance.send_message(
+                                s_msg = await bot.send_message(
                                     chat_id=fm.telegram_id,
                                     text=broadcast_text,
                                     reply_markup=claim_kb,
@@ -226,7 +239,7 @@ async def api_create_booking(
                     from ui.dashboards import master_assigned_card
                     from ui.keyboards import master_assigned_keyboard
                     try:
-                        s_msg = await telegram_bot_instance.send_message(
+                        s_msg = await bot.send_message(
                             chat_id=full_booking.master.telegram_id,
                             text=master_assigned_card(full_booking, is_auto=False),
                             reply_markup=master_assigned_keyboard(full_booking.id),
@@ -246,7 +259,7 @@ async def api_create_booking(
                 if current_user and current_user.telegram_id and current_user.telegram_id > 0:
                     try:
                         client_msg = notification_client_booking_created(full_booking)
-                        await telegram_bot_instance.send_message(
+                        await bot.send_message(
                             chat_id=current_user.telegram_id,
                             text=client_msg,
                             parse_mode="HTML",
@@ -311,6 +324,7 @@ async def api_cancel_booking(
     booking_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         booking = await cancel_booking(
@@ -321,15 +335,14 @@ async def api_cancel_booking(
         )
 
         # Notify admins and client via Telegram Bot
-        global telegram_bot_instance
-        if telegram_bot_instance:
-            await sync_booking_messages(db, telegram_bot_instance, booking.id)
+        if bot:
+            await sync_booking_messages(db, bot, booking.id)
             try:
                 actor_role = "admin" if settings.is_admin(current_user.telegram_id) else "client"
                 cancel_msg = notification_booking_cancelled(booking, actor_role)
                 for admin_id in settings.admin_telegram_ids:
                     try:
-                        await telegram_bot_instance.send_message(
+                        await bot.send_message(
                             chat_id=admin_id,
                             text=cancel_msg,
                             parse_mode="HTML",
@@ -339,7 +352,7 @@ async def api_cancel_booking(
 
                 if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
                     try:
-                        await telegram_bot_instance.send_message(
+                        await bot.send_message(
                             chat_id=booking.client_user.telegram_id,
                             text=cancel_msg,
                             parse_mode="HTML",

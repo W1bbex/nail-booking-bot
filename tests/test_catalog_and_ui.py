@@ -142,7 +142,11 @@ def test_keyboard_urls_have_explicit_tabs():
 
 
 @pytest.mark.asyncio
-async def test_idempotent_confirm_and_live_bot_card_sync(client: AsyncClient, db_session: AsyncSession):
+async def test_idempotent_confirm_and_live_bot_card_sync(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
     from unittest.mock import AsyncMock, MagicMock
     import api.routes_client as routes_client
 
@@ -151,7 +155,7 @@ async def test_idempotent_confirm_and_live_bot_card_sync(client: AsyncClient, db
     sent_msg.message_id = 777888
     mock_bot.send_message = AsyncMock(return_value=sent_msg)
     mock_bot.edit_message_text = AsyncMock()
-    routes_client.telegram_bot_instance = mock_bot
+    monkeypatch.setattr(routes_client, "telegram_bot_instance", mock_bot)
 
     target_date = (date.today() + timedelta(days=10)).strftime("%Y-%m-%d")
 

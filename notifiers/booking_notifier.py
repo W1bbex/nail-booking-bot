@@ -7,6 +7,18 @@ from sqlalchemy.orm import selectinload
 from core.config import settings
 from core.logger import setup_logger
 from core.models import Booking, BookingMessage
+from ui.dashboards import (
+    admin_booking_card,
+    master_assigned_card,
+    master_order_broadcast_card,
+    notification_booking_cancelled,
+    notification_booking_confirmed,
+)
+from ui.keyboards import (
+    admin_booking_keyboard,
+    master_assigned_keyboard,
+    master_claim_keyboard,
+)
 
 logger = setup_logger("booking_notifier")
 
@@ -36,9 +48,6 @@ async def sync_booking_messages(
 ) -> None:
     if not bot:
         return
-
-    from ui.dashboards import admin_booking_card
-    from ui.keyboards import admin_booking_keyboard, master_claim_keyboard, master_assigned_keyboard
 
     res = await session.execute(
         select(Booking)
@@ -169,13 +178,6 @@ async def dispatch_expired_booking_notifications(
     if not bot or not notifications_to_send:
         return
 
-    from ui.dashboards import (
-        master_order_broadcast_card,
-        master_assigned_card,
-        notification_booking_confirmed,
-    )
-    from ui.keyboards import master_claim_keyboard, master_assigned_keyboard
-
     for action_type, payload in notifications_to_send:
         booking_id = payload["booking_id"]
         try:
@@ -183,7 +185,6 @@ async def dispatch_expired_booking_notifications(
         except Exception as e:
             logger.error(f"Failed to sync booking messages for #{booking_id}: {e}", exc_info=True)
 
-        # Load refreshed booking object for rendering message cards
         res_b = await session.execute(
             select(Booking)
             .options(
@@ -251,11 +252,18 @@ async def dispatch_expired_booking_notifications(
                     )
 
         elif action_type == "unassigned_alert":
+            if b.client_user and b.client_user.telegram_id and b.client_user.telegram_id > 0:
+                try:
+                    c_cancel_msg = notification_booking_cancelled(b, "admin")
+                    await bot.send_message(b.client_user.telegram_id, c_cancel_msg, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"Failed to alert client about unassigned cancelled booking #{b.id}: {e}", exc_info=True)
+
             for admin_id in settings.admin_telegram_ids:
                 try:
                     await bot.send_message(
                         admin_id,
-                        f"<b>Заявка #{b.id} ожидает назначения мастера!</b>\n\nНи один мастер не взял заказ, требуется ручное назначение через карточку: /booking_{b.id}",
+                        f"<b>Заявка #{b.id} отменена (истёк срок ожидания назначения)!</b>\n\nНи один мастер не взял заказ в установленный срок. Время освобождено для других клиентов. Карточка: /booking_{b.id}",
                         parse_mode="HTML",
                     )
                 except Exception as e:

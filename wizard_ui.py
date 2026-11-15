@@ -90,9 +90,12 @@ def choose(title: str, options: tuple, lines=()) -> str:
                     elif event.event_type == 2:
                         mouse = event.event.mouse
                         if mouse.flags == 4:
-                            selected = max(0, min(len(options)-1, selected + (-1 if mouse.buttons >> 16 < 32768 else 1)))
-                            armed = None
-                            break
+                            raw_delta = (mouse.buttons >> 16) & 0xFFFF
+                            if raw_delta != 0:
+                                delta = -1 if raw_delta < 32768 else 1
+                                selected = max(0, min(len(options) - 1, selected + delta))
+                                armed = None
+                                break
                         pressed = bool(mouse.buttons & 1)
                         row = (mouse.position.y - y) // 2
                         if pressed and not left and mouse.flags in (0, 2):

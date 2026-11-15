@@ -52,11 +52,15 @@ nail-booking-bot/
 │   ├── config.py           # Двухуровневая конфигурация (.env + config.json)
 │   ├── database.py         # aiosqlite + SQLAlchemy 2.0 движок и сессии
 │   ├── models.py           # Модели User, Master, Service, Booking, BlockedInterval
-│   ├── booking_service.py  # Расчет слотов с длительностью, мьютекс и защита от двойной записи
+│   ├── booking_service.py  # Жизненный цикл заявки, мьютекс и защита от двойной записи
+│   ├── slot_service.py     # Расчет свободных слотов, интервалы и шаг сетки
+│   ├── analytics_service.py# Финансовая статистика расписания и расчет среднего чека
 │   ├── security.py         # Валидация HMAC-SHA256 Telegram initData + RBAC
 │   ├── lock.py             # Single-instance guard (bot.lock)
 │   ├── backup.py           # Ротируемые бэкапы SQLite (max 7 копий, без разрастания)
 │   └── logger.py           # Ротируемое логирование (10 МБ, 5 файлов)
+├── notifiers/              # Изолированный транспорт уведомлений
+│   └── booking_notifier.py # Доставка карточек визитов и синхронизация сообщений
 ├── api/
 │   ├── app.py              # FastAPI приложение, lifespan, статика Mini App
 │   ├── routes_client.py    # Клиентские эндпоинты (/api/services, /api/slots, /api/bookings)
@@ -68,12 +72,15 @@ nail-booking-bot/
 │   └── keyboards.py        # InlineKeyboards (стили, WebApp кнопки)
 ├── handlers/
 │   ├── client.py           # Тонкие обработчики команд (/start, /book, /bookings, /services...)
-│   └── admin.py            # Обработчики для мастеров (/admin, /schedule, /block, callbacks)
+│   ├── admin.py            # Обработчики для мастеров (/admin, /schedule, /block, callbacks)
+│   └── admin_manual_booking.py # FSM пошаговой ручной записи клиента администратором
 ├── miniapp/                # Клиентский Telegram Mini App
 │   ├── index.html          # Разметка пошаговой записи (5 шагов)
 │   ├── styles.css          # Beauty-минимализм, адаптив, светлая/тёмная тема
 │   └── app.js              # Реактивный клиентский движок и интеграция с Telegram WebApp
-├── tests/                  # Регрессионные тесты pytest (159 проверок)
+├── alembic/                # Асинхронные миграции базы данных
+│   └── versions/           # Версионные ревизии схемы SQLite
+├── tests/                  # Регрессионные тесты pytest (188 проверок)
 │   ├── conftest.py         # In-memory SQLite фикстуры и тестовый клиент
 │   ├── test_slots.py       # Расчёт слотов, учёт длительности, вытеснение занятых
 │   ├── test_booking.py     # Жизненный цикл заявки, дедлайны отмены
@@ -83,6 +90,10 @@ nail-booking-bot/
 ├── bot.py                  # Точка входа (FastAPI + aiogram polling)
 ├── config.json             # Операционные параметры студии, мастера, услуги, ID админов
 ├── .env.example            # Шаблон секретов
+├── alembic.ini             # Конфигурация миграций Alembic
+├── Dockerfile              # Multi-stage production Dockerfile
+├── docker-compose.yml      # Оркестрация контейнеров и томов
+├── pyproject.toml          # Метаданные проекта (PEP 621) и конфигурация линтеров
 └── pytest.ini              # Конфигурация тестов
 ```
 
@@ -102,7 +113,7 @@ pip install -r requirements-dev.txt   # зависимости для запус
 ```powershell
 pytest tests/ -v
 ```
-162 тестов проверяют:
+188 тестов проверяют:
 - Корректный подбор слотов с учётом длительности услуги (30 мин, 60 мин, 90 мин, 150 мин).
 - Исключение занятых и заблокированных интервалов и обедов мастеров.
 - Ролевую модель: авто-привязка мастера по `@username`, подтверждение, отказ, авто-назначение по таймауту.

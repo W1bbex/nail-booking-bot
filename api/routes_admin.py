@@ -1,12 +1,15 @@
 from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional
+from aiogram import Bot
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from core.booking_notifier import sync_booking_messages
+from api.dependencies import get_bot
+from notifiers.booking_notifier import sync_booking_messages
+from core.analytics_service import calculate_schedule_stats
 from core.booking_service import (
     cancel_booking,
     complete_booking,
@@ -15,6 +18,7 @@ from core.booking_service import (
     get_moscow_now,
 )
 from core.catalog_service import (
+    block_all_masters_time_interval,
     block_time_interval,
     create_master,
     create_service,
@@ -72,23 +76,8 @@ async def get_admin_schedule(
     )
     bookings = res_b.scalars().all()
 
-    # Calculate rich statistics using snapshotted booking price
-    revenue = sum(
-        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
-        for b in bookings
-        if b.status in ("confirmed", "completed")
-    )
-    expected_revenue = sum(
-        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
-        for b in bookings
-        if b.status in ("confirmed", "completed", "pending")
-    )
-    total_count = len(bookings)
-    pending_count = sum(1 for b in bookings if b.status == "pending")
-    confirmed_count = sum(1 for b in bookings if b.status == "confirmed")
-    completed_count = sum(1 for b in bookings if b.status == "completed")
-    cancelled_count = sum(1 for b in bookings if b.status.startswith("cancelled"))
-    avg_check = round(revenue / (completed_count + confirmed_count), 0) if (completed_count + confirmed_count) > 0 else 0
+    # Calculate rich statistics using analytics service
+    stats = calculate_schedule_stats(bookings)
 
     # Fetch blocked intervals
     res_blk = await db.execute(
@@ -101,16 +90,7 @@ async def get_admin_schedule(
 
     return {
         "date": target_date.strftime("%Y-%m-%d"),
-        "stats": {
-            "revenue": revenue,
-            "expected_revenue": expected_revenue,
-            "total": total_count,
-            "pending": pending_count,
-            "confirmed": confirmed_count,
-            "completed": completed_count,
-            "cancelled": cancelled_count,
-            "avg_check": avg_check,
-        },
+        "stats": stats,
         "bookings": [
             {
                 "id": b.id,
@@ -142,9 +122,28 @@ async def get_admin_schedule(
     }
 
 
+def _handle_admin_service_error(e: Exception) -> HTTPException:
+    if isinstance(e, PermissionError):
+        return HTTPException(status_code=403, detail=str(e))
+    if isinstance(e, LookupError) or "не найден" in str(e).lower():
+        return HTTPException(status_code=404, detail=str(e))
+    return HTTPException(status_code=400, detail=str(e))
+
+
+def normalize_phone(raw: str) -> str:
+    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith(("7", "8")):
+        return "+7" + digits[1:]
+    if digits:
+        return "+" + digits
+    return raw.strip()
+
+
 @router.get("/bookings")
 async def list_admin_bookings(
     status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     admin_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
@@ -156,6 +155,7 @@ async def list_admin_bookings(
     if status_filter:
         stmt = stmt.where(Booking.status == status_filter)
 
+    stmt = stmt.limit(limit).offset(offset)
     res = await db.execute(stmt)
     bookings = res.scalars().all()
 
@@ -185,16 +185,16 @@ async def api_admin_confirm(
     booking_id: int,
     admin_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         booking = await confirm_booking(db, booking_id, admin_user.telegram_id)
-        from api.routes_client import telegram_bot_instance
-        if telegram_bot_instance:
-            await sync_booking_messages(db, telegram_bot_instance, booking.id)
+        if bot:
+            await sync_booking_messages(db, bot, booking.id)
             if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
                 try:
                     msg = notification_booking_confirmed(booking)
-                    await telegram_bot_instance.send_message(
+                    await bot.send_message(
                         chat_id=booking.client_user.telegram_id,
                         text=msg,
                         parse_mode="HTML",
@@ -214,16 +214,16 @@ async def api_admin_cancel(
     booking_id: int,
     admin_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         booking = await cancel_booking(db, booking_id, admin_user.telegram_id, is_admin_action=True)
-        from api.routes_client import telegram_bot_instance
-        if telegram_bot_instance:
-            await sync_booking_messages(db, telegram_bot_instance, booking.id)
+        if bot:
+            await sync_booking_messages(db, bot, booking.id)
             if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
                 try:
                     msg = notification_booking_cancelled(booking, "admin")
-                    await telegram_bot_instance.send_message(
+                    await bot.send_message(
                         chat_id=booking.client_user.telegram_id,
                         text=msg,
                         parse_mode="HTML",
@@ -243,12 +243,12 @@ async def api_admin_complete(
     booking_id: int,
     admin_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         booking = await complete_booking(db, booking_id, admin_user.telegram_id)
-        from api.routes_client import telegram_bot_instance
-        if telegram_bot_instance:
-            await sync_booking_messages(db, telegram_bot_instance, booking.id)
+        if bot:
+            await sync_booking_messages(db, bot, booking.id)
         return {"success": True, "booking_id": booking.id, "status": booking.status}
     except PermissionError as pe:
         raise HTTPException(status_code=403, detail=str(pe))
@@ -289,21 +289,15 @@ async def api_admin_block(
 
     try:
         if payload.master_id == 0:
-            masters = await get_all_masters(db, include_inactive=False)
-            if not masters:
-                raise ValueError("Нет активных мастеров для блокировки времени")
-            created_ids = []
-            for m in masters:
-                interval = await block_time_interval(
-                    session=db,
-                    master_id=m.id,
-                    block_date=b_date,
-                    start_time=st,
-                    end_time=et,
-                    reason=payload.reason,
-                    admin_telegram_id=admin_user.telegram_id,
-                )
-                created_ids.append(interval.id)
+            intervals = await block_all_masters_time_interval(
+                session=db,
+                block_date=b_date,
+                start_time=st,
+                end_time=et,
+                reason=payload.reason,
+                admin_telegram_id=admin_user.telegram_id,
+            )
+            created_ids = [i.id for i in intervals]
             return {
                 "success": True,
                 "id": created_ids[0],
@@ -372,7 +366,7 @@ async def api_admin_toggle_service(
             "is_active": service.is_active,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 class ServiceCreateRequest(BaseModel):
@@ -421,7 +415,7 @@ async def api_admin_create_service(
             "is_active": service.is_active,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 @router.put("/services/{service_id}")
@@ -454,7 +448,7 @@ async def api_admin_update_service(
             "is_active": service.is_active,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 @router.delete("/services/{service_id}")
@@ -472,7 +466,7 @@ async def api_admin_delete_service(
             "message": f"Услуга «{service.name}» удалена",
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 class MasterCreateRequest(BaseModel):
@@ -537,7 +531,7 @@ async def api_admin_create_master(
             "telegram_username": master.telegram_username,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 @router.put("/masters/{master_id}")
@@ -568,7 +562,7 @@ async def api_admin_update_master(
             "telegram_username": master.telegram_username,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 @router.post("/masters/{master_id}/toggle")
@@ -586,7 +580,7 @@ async def api_admin_toggle_master(
             "is_active": master.is_active,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 @router.delete("/masters/{master_id}")
@@ -604,7 +598,7 @@ async def api_admin_delete_master(
             "message": f"Мастер «{master.full_name}» удалён",
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 class SalonSettingsUpdateRequest(BaseModel):
@@ -666,7 +660,7 @@ async def api_admin_update_service_price(
             "price": service.price,
         }
     except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _handle_admin_service_error(e)
 
 
 class AdminManualBookingRequest(BaseModel):
@@ -684,6 +678,7 @@ async def api_admin_manual_booking(
     payload: AdminManualBookingRequest,
     admin_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
+    bot: Optional[Bot] = Depends(get_bot),
 ) -> Dict[str, Any]:
     try:
         b_date = datetime.strptime(payload.date, "%Y-%m-%d").date()
@@ -693,14 +688,15 @@ async def api_admin_manual_booking(
         raise HTTPException(status_code=400, detail=f"Некорректная дата или время: {parse_err}")
 
     clean_phone = payload.client_phone.strip()
+    norm_phone = normalize_phone(clean_phone)
     clean_name = payload.client_name.strip() or "Клиент"
 
     try:
         existing_client = (await db.execute(
-            select(User).where(User.phone == clean_phone)
+            select(User).where((User.phone == norm_phone) | (User.phone == clean_phone))
         )).scalars().first()
         from core.security import deterministic_virtual_telegram_id
-        target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(clean_phone)
+        target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(norm_phone or clean_phone)
 
         booking = await create_booking(
             session=db,
@@ -715,9 +711,10 @@ async def api_admin_manual_booking(
             ignore_lead_time=True,
         )
         confirmed_booking = await confirm_booking(db, booking.id, admin_user.telegram_id)
+        booking_result_id = confirmed_booking.id
+        booking_result_status = confirmed_booking.status
 
-        from api.routes_client import telegram_bot_instance
-        if telegram_bot_instance:
+        if bot:
             try:
                 res = await db.execute(
                     select(Booking)
@@ -730,16 +727,34 @@ async def api_admin_manual_booking(
                     for aid in settings.admin_telegram_ids:
                         if aid != admin_user.telegram_id:
                             try:
-                                await telegram_bot_instance.send_message(aid, admin_msg, parse_mode="HTML")
+                                await bot.send_message(aid, admin_msg, parse_mode="HTML")
                             except Exception:
                                 pass
+
+                    if full_booking.master and full_booking.master.telegram_id:
+                        try:
+                            from ui.dashboards import master_assigned_card
+                            from ui.keyboards import master_assigned_keyboard
+                            from notifiers.booking_notifier import record_booking_message
+                            m_msg = await bot.send_message(
+                                chat_id=full_booking.master.telegram_id,
+                                text=master_assigned_card(full_booking),
+                                reply_markup=master_assigned_keyboard(full_booking.id),
+                                parse_mode="HTML",
+                            )
+                            msg_id = getattr(m_msg, "message_id", None)
+                            if isinstance(msg_id, int):
+                                await record_booking_message(db, full_booking.id, full_booking.master.telegram_id, msg_id, "master_card")
+                        except Exception as m_err:
+                            await db.rollback()
+                            logger.warning(f"Failed to notify master of manual booking: {m_err}")
             except Exception as notify_err:
-                logger.warning(f"Failed to send admin notification: {notify_err}")
+                logger.warning(f"Failed to send admin/master notification: {notify_err}")
 
         return {
             "success": True,
-            "booking_id": confirmed_booking.id,
-            "status": confirmed_booking.status,
+            "booking_id": booking_result_id,
+            "status": booking_result_status,
             "message": "Клиент успешно записан",
         }
     except ValueError as val_err:

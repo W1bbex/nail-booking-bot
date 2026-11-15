@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-from sqlalchemy import event, select, text
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -18,7 +18,7 @@ async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
+def set_sqlite_pragma(dbapi_connection, _connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=30000")
@@ -41,46 +41,6 @@ async def init_db() -> None:
     logger.info("Initializing SQLite database tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-        # Safe column migration for existing SQLite databases
-        res_m_cols = await conn.execute(text("PRAGMA table_info(masters)"))
-        m_cols = {row[1] for row in res_m_cols.fetchall()}
-        if "archived_at" not in m_cols:
-            await conn.execute(text("ALTER TABLE masters ADD COLUMN archived_at DATETIME"))
-        if "telegram_username" not in m_cols:
-            await conn.execute(text("ALTER TABLE masters ADD COLUMN telegram_username VARCHAR(80)"))
-        if "telegram_id" not in m_cols:
-            await conn.execute(text("ALTER TABLE masters ADD COLUMN telegram_id INTEGER"))
-
-        res_s_cols = await conn.execute(text("PRAGMA table_info(services)"))
-        s_cols = {row[1] for row in res_s_cols.fetchall()}
-        if "archived_at" not in s_cols:
-            await conn.execute(text("ALTER TABLE services ADD COLUMN archived_at DATETIME"))
-
-        res_b_cols = await conn.execute(text("PRAGMA table_info(bookings)"))
-        b_cols = {row[1] for row in res_b_cols.fetchall()}
-        if "is_any_master" not in b_cols:
-            await conn.execute(text("ALTER TABLE bookings ADD COLUMN is_any_master BOOLEAN DEFAULT 0"))
-        if "declined_master_ids" not in b_cols:
-            await conn.execute(text("ALTER TABLE bookings ADD COLUMN declined_master_ids VARCHAR(255)"))
-        if "assignment_deadline" not in b_cols:
-            await conn.execute(text("ALTER TABLE bookings ADD COLUMN assignment_deadline DATETIME"))
-        if "client_reassign_deadline" not in b_cols:
-            await conn.execute(text("ALTER TABLE bookings ADD COLUMN client_reassign_deadline DATETIME"))
-        if "price" not in b_cols:
-            await conn.execute(text("ALTER TABLE bookings ADD COLUMN price FLOAT DEFAULT 0.0"))
-            # Backfill price from services table for existing historical bookings
-            await conn.execute(text(
-                "UPDATE bookings SET price = ("
-                "  SELECT price FROM services WHERE services.id = bookings.service_id"
-                ") WHERE price IS NULL OR price = 0.0"
-            ))
-
-        await conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_active_master_slot "
-            "ON bookings (master_id, booking_date, start_time) "
-            "WHERE status IN ('pending', 'confirmed', 'awaiting_client_choice')"
-        ))
 
     # Seed initial data if tables are empty
     async with async_session_maker() as session:

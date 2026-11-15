@@ -8,8 +8,10 @@ from console_mouse import menu_hit
 
 def test_repeated_cancel_never_opens_another_prompt(monkeypatch):
     choices = iter(["interrupt", "2", "0"])
+    seen_choices = []
     def choose():
         value = next(choices)
+        seen_choices.append(value)
         if value == "interrupt": raise KeyboardInterrupt
         return value
     def cancel(**kwargs): raise KeyboardInterrupt
@@ -18,6 +20,7 @@ def test_repeated_cancel_never_opens_another_prompt(monkeypatch):
     monkeypatch.setattr("setup_wizard.configure", cancel)
     monkeypatch.setattr("wizard_ui.field", unexpected)
     launcher.main()
+    assert seen_choices == ["interrupt", "2", "0"]
 
 
 def test_mouse_hit_only_accepts_menu_rows():

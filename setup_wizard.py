@@ -130,11 +130,6 @@ def read_token() -> str | None:
             refresh()
 
 
-def valid_https_url(value: str) -> bool:
-    url = urlsplit(value)
-    return url.scheme == "https" and bool(url.hostname) and not url.username and not url.password
-
-
 def normalize_app_url(value: str) -> str:
     value = value.strip()
     if "://" not in value:
@@ -226,34 +221,44 @@ def _configure(root: Path, *, telegram_only: bool) -> bool:
             admin = identify_owner(token, bot["username"])
         else:
             return False
+
+        if admin is None: return False
+        owner_label = f"@{expected} · ID {admin}" if method == "3" else f"ID {admin}"
+        clear()
+        panel("3 / 3  ·  Где открывать запись?", (bot_label, f"Владелец: {owner_label}", "", "Вставьте ссылку на приложение.", "https:// и нужный путь подставим сами."))
+        while True:
+            raw = field("Ссылка")
+            if not raw: return False
+            try:
+                url = normalize_app_url(raw)
+                break
+            except ValueError as exc:
+                show_error(f"  {exc}")
+
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+        lines = [line for line in existing.splitlines() if not re.match(r"\s*(?:export\s+)?BOT_TOKEN\s*=", line)]
+        lines.append(f"BOT_TOKEN={token}")
+        config["admin_telegram_ids"] = [admin]
+        config["server"].update(public_url=url, dev_mode=False)
+
+        # Atomic writes with temporary files to avoid zero-byte corruption
+        tmp_env = env_path.with_suffix(".tmp")
+        tmp_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(str(tmp_env), str(env_path))
+
+        tmp_config = config_path.with_suffix(".tmp")
+        tmp_config.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(str(tmp_config), str(config_path))
+
+        clear()
+        panel("ГОТОВО · настройки сохранены", (bot_label, f"Владелец: {owner_label}", f"Приложение: {url}/miniapp/"))
+        return True
     except SetupError as exc:
         panel("Не удалось продолжить", (str(exc),))
         field("Enter — назад")
         return False
     finally:
         lock.release()
-    if admin is None: return False
-    owner_label = f"@{expected} · ID {admin}" if method == "3" else f"ID {admin}"
-    clear()
-    panel("3 / 3  ·  Где открывать запись?", (bot_label, f"Владелец: {owner_label}", "", "Вставьте ссылку на приложение.", "https:// и нужный путь подставим сами."))
-    while True:
-        raw = field("Ссылка")
-        if not raw: return False
-        try:
-            url = normalize_app_url(raw)
-            break
-        except ValueError as exc:
-            show_error(f"  {exc}")
-    existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-    lines = [line for line in existing.splitlines() if not re.match(r"\s*(?:export\s+)?BOT_TOKEN\s*=", line)]
-    lines.append(f"BOT_TOKEN={token}")
-    config["admin_telegram_ids"] = [admin]
-    config["server"].update(public_url=url, dev_mode=False)
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    clear()
-    panel("ГОТОВО · настройки сохранены", (bot_label, f"Владелец: {owner_label}", f"Приложение: {url}/miniapp/"))
-    return True
 
 
 if __name__ == "__main__":

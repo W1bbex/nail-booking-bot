@@ -262,6 +262,15 @@ def admin_booking_keyboard(
             )
         ])
 
+    if status in ("pending", "confirmed", "awaiting_client_choice"):
+        rows.append([
+            InlineKeyboardButton(
+                text="Переназначить мастера",
+                callback_data=f"admin_reassign:{booking_id}:{back_target}",
+                style="primary",
+            )
+        ])
+
     if client_telegram_id and client_telegram_id > 0:
         rows.append([
             InlineKeyboardButton(
@@ -279,6 +288,26 @@ def admin_booking_keyboard(
         InlineKeyboardButton(
             text="Назад к расписанию",
             callback_data=back_cb,
+            style="primary",
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_reassign_keyboard(booking_id: int, masters: list, back_target: str = "today") -> InlineKeyboardMarkup:
+    rows = []
+    for m in masters:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{m.full_name} ({m.specialization})",
+                callback_data=f"admin_assign:{booking_id}:{m.id}:{back_target}",
+                style="primary",
+            )
+        ])
+    rows.append([
+        InlineKeyboardButton(
+            text="Назад к записи",
+            callback_data=f"admin_card:{booking_id}:{back_target}",
             style="primary",
         )
     ])

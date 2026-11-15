@@ -70,7 +70,6 @@ async def _get_masters_sorted_by_daily_load(
     count_stmt = select(Booking.master_id, func.count(Booking.id)).where(
         Booking.booking_date == target_date,
         Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-        not_(and_(Booking.is_any_master.is_(True), Booking.status == "pending")),
     )
     if exclude_booking_id is not None:
         count_stmt = count_stmt.where(Booking.id != exclude_booking_id)
@@ -99,14 +98,13 @@ async def get_free_active_masters(
         if m.id in exclude_set or not m.is_active or m.archived_at is not None:
             continue
 
-        # Check conflicting bookings (ignore unassigned any-master pending reservation or excluded booking)
+        # Check conflicting bookings (excluding specified booking if provided)
         conflict_stmt = select(Booking).where(
             Booking.master_id == m.id,
             Booking.booking_date == booking_date,
             Booking.status.in_(ACTIVE_BOOKING_STATUSES),
             Booking.start_time < end_time,
             Booking.end_time > start_time,
-            not_(and_(Booking.is_any_master.is_(True), Booking.status == "pending")),
         )
         if exclude_booking_id is not None:
             conflict_stmt = conflict_stmt.where(Booking.id != exclude_booking_id)
@@ -149,6 +147,9 @@ async def create_master(
     telegram_username: Optional[str] = None,
     admin_telegram_id: Optional[int] = None,
 ) -> Master:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Недостаточно прав администратора")
+
     clean_name = full_name.strip()
     if not clean_name:
         raise ValueError("Имя мастера не может быть пустым")
@@ -180,6 +181,9 @@ async def update_master(
     telegram_username: Optional[str] = None,
     admin_telegram_id: Optional[int] = None,
 ) -> Master:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Недостаточно прав администратора")
+
     res = await session.execute(select(Master).where(Master.id == master_id, Master.archived_at.is_(None)))
     master = res.scalar_one_or_none()
     if not master:
@@ -213,6 +217,9 @@ async def toggle_master_active(
     master_id: int,
     admin_telegram_id: Optional[int] = None,
 ) -> Master:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Недостаточно прав администратора")
+
     res = await session.execute(select(Master).where(Master.id == master_id, Master.archived_at.is_(None)))
     master = res.scalar_one_or_none()
     if not master:
@@ -276,6 +283,9 @@ async def create_service(
     is_active: bool = True,
     admin_telegram_id: Optional[int] = None,
 ) -> Service:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Недостаточно прав администратора")
+
     clean_name = name.strip()
     clean_category = category.strip()
     if not clean_name:
@@ -313,6 +323,9 @@ async def update_service(
     is_active: Optional[bool] = None,
     admin_telegram_id: Optional[int] = None,
 ) -> Service:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Недостаточно прав администратора")
+
     res = await session.execute(select(Service).where(Service.id == service_id, Service.archived_at.is_(None)))
     service = res.scalar_one_or_none()
     if not service:
@@ -439,9 +452,9 @@ async def bind_master_by_telegram(
         select(Master).where(
             func.lower(func.replace(Master.telegram_username, "@", "")) == clean_name,
             Master.archived_at.is_(None),
-        )
+        ).order_by(Master.id.desc())
     )
-    master = res.scalar_one_or_none()
+    master = res.scalars().first()
     if not master:
         return None
 
@@ -488,6 +501,12 @@ async def block_time_interval(
         raise ValueError("Нельзя установить перерыв в прошедшем времени")
 
     async with _get_booking_lock():
+        master = (await session.execute(
+            select(Master).where(Master.id == master_id, Master.archived_at.is_(None))
+        )).scalar_one_or_none()
+        if not master:
+            raise ValueError(f"Мастер #{master_id} не найден или деактивирован")
+
         # Check duplicate / overlapping blocked interval for the same master
         existing_block = (await session.execute(
             select(BlockedInterval).where(
@@ -533,6 +552,85 @@ async def block_time_interval(
         await session.refresh(interval)
         logger.info(f"Blocked interval created for master {master_id} on {block_date}: {start_time}-{end_time}")
         return interval
+
+
+async def block_all_masters_time_interval(
+    session: AsyncSession,
+    block_date: date,
+    start_time: time,
+    end_time: time,
+    reason: Optional[str] = "Технический перерыв",
+    admin_telegram_id: Optional[int] = None,
+    now_override: Optional[datetime] = None,
+) -> List[BlockedInterval]:
+    if admin_telegram_id and not settings.is_admin(admin_telegram_id):
+        raise PermissionError("Блокировка времени доступна только администраторам")
+
+    if start_time >= end_time:
+        raise ValueError("Время начала блокировки должно быть раньше времени окончания")
+
+    now_dt = now_override or get_moscow_now()
+    if block_date < now_dt.date():
+        raise ValueError("Нельзя установить перерыв на прошедшую дату")
+    if block_date == now_dt.date() and end_time <= now_dt.time():
+        raise ValueError("Нельзя установить перерыв в прошедшем времени")
+
+    async with _get_booking_lock():
+        masters = await get_all_masters(session, include_inactive=False)
+        if not masters:
+            raise ValueError("Нет активных мастеров для блокировки времени")
+
+        # 1. Validate all masters first to guarantee transactional atomicity
+        for m in masters:
+            existing_block = (await session.execute(
+                select(BlockedInterval).where(
+                    BlockedInterval.master_id == m.id,
+                    BlockedInterval.booking_date == block_date,
+                    BlockedInterval.start_time < end_time,
+                    BlockedInterval.end_time > start_time,
+                )
+            )).scalars().first()
+            if existing_block:
+                raise ValueError(
+                    f"У мастера {m.full_name} уже установлен перерыв на это время "
+                    f"({existing_block.start_time.strftime('%H:%M')} — {existing_block.end_time.strftime('%H:%M')})"
+                )
+
+            conflict = (await session.execute(
+                select(Booking).where(
+                    Booking.master_id == m.id,
+                    Booking.booking_date == block_date,
+                    Booking.status.in_(ACTIVE_BOOKING_STATUSES),
+                    Booking.start_time < end_time,
+                    Booking.end_time > start_time,
+                )
+            )).scalars().first()
+            if conflict:
+                raise ValueError(
+                    f"Невозможно заблокировать интервал: у мастера {m.full_name} уже есть активная запись #{conflict.id} "
+                    f"({conflict.client_name})"
+                )
+
+        # 2. Add all intervals and commit once atomically
+        created_intervals = []
+        for m in masters:
+            interval = BlockedInterval(
+                master_id=m.id,
+                booking_date=block_date,
+                start_time=start_time,
+                end_time=end_time,
+                reason=reason,
+            )
+            session.add(interval)
+            created_intervals.append(interval)
+
+        await session.commit()
+        for interval in created_intervals:
+            await session.refresh(interval)
+        logger.info(
+            f"Blocked intervals batch created for {len(created_intervals)} masters on {block_date}: {start_time}-{end_time}"
+        )
+        return created_intervals
 
 
 async def unblock_time_interval(

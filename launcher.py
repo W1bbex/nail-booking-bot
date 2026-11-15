@@ -130,8 +130,18 @@ def read_menu_events(console, menu_hit, selected=0, armed=None, left_down=False)
 
 
 def preview() -> None:
-    config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-    port = int(config["server"].get("port", 8080))
+    from wizard_ui import panel
+    config_path = ROOT / "config.json"
+    if not config_path.is_file():
+        panel("Файл конфигурации не найден", ("Сначала выполните настройку бота (пункт 2).",))
+        return
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        port = int(config.get("server", {}).get("port", 8080))
+    except (json.JSONDecodeError, ValueError, TypeError) as err:
+        panel("Ошибка в config.json", (f"Не удалось прочитать параметры сервера: {err}",))
+        return
+
     address = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
     env["NAIL_LOCAL_PREVIEW"] = "1"
@@ -168,8 +178,15 @@ def preview() -> None:
                 process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                 process.wait(timeout=10)
             except (OSError, subprocess.TimeoutExpired):
-                process.terminate()
-                process.wait(timeout=5)
+                try:
+                    process.terminate()
+                    process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        process.kill()
+                        process.wait(timeout=5)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
 
 
 def main() -> None:
@@ -185,8 +202,19 @@ def main() -> None:
                 from setup_wizard import configure
                 if not configure(telegram_only=True): continue
             elif choice == "3":
-                config = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-                if config["server"].get("dev_mode", False):
+                config_path = ROOT / "config.json"
+                if not config_path.is_file():
+                    panel("Файл конфигурации не найден", ("Сначала выполните настройку бота (пункт 2).",))
+                    field("Enter — вернуться в меню")
+                    continue
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, ValueError) as err:
+                    panel("Ошибка в config.json", (f"Не удалось прочитать параметры: {err}",))
+                    field("Enter — вернуться в меню")
+                    continue
+
+                if config.get("server", {}).get("dev_mode", False):
                     panel("Бот пока не подключён", ("Выберите «Подключить своего бота» в главном меню.",))
                 else:
                     print("  Бот запускается. Ctrl+C — остановить и вернуться.")

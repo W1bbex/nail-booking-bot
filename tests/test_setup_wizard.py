@@ -2,7 +2,7 @@ import json
 import sys
 import pytest
 
-from setup_wizard import configure, valid_https_url, read_token, token_display, token_hint, normalize_app_url
+from setup_wizard import configure, read_token, token_display, token_hint, normalize_app_url
 
 
 @pytest.mark.parametrize("value", ["example.org/demo/", "https://example.org/demo/miniapp/", "http://example.org/demo"])
@@ -140,9 +140,13 @@ def test_telegram_setup_disables_demo_and_preserves_other_secrets(tmp_path, monk
 
 
 def test_https_address_validation():
-    assert valid_https_url("https://example.org")
-    assert not valid_https_url("http://example.org")
-    assert not valid_https_url("https://user:pass@example.org")
+    assert normalize_app_url("https://example.org") == "https://example.org"
+    assert normalize_app_url("example.org") == "https://example.org"
+    assert normalize_app_url("http://example.org") == "https://example.org"
+    with pytest.raises(ValueError):
+        normalize_app_url("ftp://example.org")
+    with pytest.raises(ValueError):
+        normalize_app_url("https://user:pass@example.org")
 
 
 def test_owner_can_be_confirmed_by_numeric_id(tmp_path, monkeypatch):

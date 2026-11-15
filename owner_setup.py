@@ -64,7 +64,7 @@ def identify_owner(token: str, username: str, *, timeout: float = 180, expected_
     panel("Ждём сообщение в Telegram", (f"Откройте @{username} и отправьте /start.",
           f"Ждём @{expected_username}." if expected_username else "Покажем профиль первого написавшего.",
           "Esc / Ctrl+C — назад. Ожидание до 3 минут."))
-    started = int(time.time()) - 30
+    started = int(time.time()) - 60
     deadline = time.monotonic() + timeout
     offset = None
     while time.monotonic() < deadline:
@@ -82,8 +82,13 @@ def identify_owner(token: str, username: str, *, timeout: float = 180, expected_
         except SetupError:
             time.sleep(1)
             continue
+        if not isinstance(updates, list):
+            time.sleep(1)
+            continue
         for update in updates:
-            offset = max(offset or 0, update["update_id"] + 1)
+            if not isinstance(update, dict):
+                continue
+            offset = max(offset or 0, update.get("update_id", 0) + 1)
             message = update.get("message") or {}
             chat = message.get("chat") or {}
             user = message.get("from") or {}

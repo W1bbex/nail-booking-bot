@@ -2,7 +2,7 @@ import html
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-from core.booking_notifier import record_booking_message, sync_booking_messages
+from notifiers.booking_notifier import record_booking_message, sync_booking_messages
 from core import booking_service
 from core.catalog_service import get_free_active_masters
 from core.config import settings
@@ -15,6 +15,7 @@ from ui.dashboards import (
     notification_booking_confirmed,
 )
 from ui.keyboards import (
+    back_to_menu_keyboard,
     client_reassign_choice_keyboard,
     master_assigned_keyboard,
     master_claim_keyboard,
@@ -37,6 +38,7 @@ async def cb_master_claim(call: CallbackQuery) -> None:
                     try:
                         await call.message.edit_text(
                             f"<b>Заявка #{booking_id}</b>\n\n{html.escape(msg)}",
+                            reply_markup=back_to_menu_keyboard(),
                             parse_mode="HTML",
                         )
                     except Exception:
@@ -108,6 +110,7 @@ async def cb_master_decline(call: CallbackQuery) -> None:
             try:
                 await call.message.edit_text(
                     f"<b>Заявка #{booking.id}</b>\n\nВы отказались от выполнения этого заказа.",
+                    reply_markup=back_to_menu_keyboard(),
                     parse_mode="HTML",
                 )
             except Exception:
@@ -174,6 +177,12 @@ async def cb_master_decline(call: CallbackQuery) -> None:
                             logger.warning(f"Failed to forward order to {fm.full_name}: {m_err}")
 
             elif flow_status == "all_declined" and call.bot:
+                if booking.client_user and booking.client_user.telegram_id and booking.client_user.telegram_id > 0:
+                    try:
+                        c_cancel_msg = notification_booking_cancelled(booking, "admin")
+                        await call.bot.send_message(booking.client_user.telegram_id, c_cancel_msg, parse_mode="HTML")
+                    except Exception as c_err:
+                        logger.warning(f"Failed to alert client on all_declined: {c_err}")
                 for aid in settings.admin_telegram_ids:
                     try:
                         c_name = html.escape(booking.client_user.full_name) if booking.client_user else "Клиент"
@@ -184,7 +193,7 @@ async def cb_master_decline(call: CallbackQuery) -> None:
                             f"<b>Все мастера отклонили заказ #{booking.id}!</b>\n\n"
                             f"Клиент: {c_name}\n"
                             f"Дата: {b_date_str} {b_time_str}\n"
-                            f"Требуется ручное назначение мастера в админ-панели: /booking_{booking.id}",
+                            f"Свободных мастеров не осталось, заявка отменена. Свяжитесь с клиентом при необходимости: /booking_{booking.id}",
                             parse_mode="HTML",
                         )
                     except Exception:

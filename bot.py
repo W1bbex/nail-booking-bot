@@ -111,6 +111,7 @@ async def main() -> None:
     else:
         try:
             bot = Bot(token=settings.bot_token)
+            app.state.bot = bot
             api_client.telegram_bot_instance = bot
             dp = Dispatcher()
             dp.include_router(client_router)
@@ -142,11 +143,17 @@ async def main() -> None:
         core_tasks.append(bot_task)
     all_tasks = core_tasks + [watchdog_task, backup_task]
 
+    has_critical_error = False
     try:
         done, pending = await asyncio.wait(
             core_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
+        for t in done:
+            if not t.cancelled() and t.exception():
+                err = t.exception()
+                logger.critical(f"Critical task failure in core task: {err}", exc_info=err)
+                has_critical_error = True
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
@@ -162,6 +169,9 @@ async def main() -> None:
             except Exception as close_err:
                 logger.warning(f"Error closing bot session: {close_err}")
         lock.release()
+        if has_critical_error:
+            logger.error("Nail Booking Bot terminated due to critical error.")
+            sys.exit(1)
         logger.info("Nail Booking Bot stopped cleanly.")
 
 

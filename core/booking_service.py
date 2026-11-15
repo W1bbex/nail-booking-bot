@@ -11,6 +11,7 @@ from core.catalog_service import _get_masters_sorted_by_daily_load, get_free_act
 from core.config import settings
 from core.logger import setup_logger
 from core.models import BlockedInterval, Booking, Master, Service, User
+from core.slot_service import add_minutes, get_available_slots, get_moscow_now
 
 logger = setup_logger("booking_service")
 
@@ -27,14 +28,6 @@ def _mask_phone(phone: str) -> str:
     return "***"
 
 
-def get_moscow_now() -> datetime:
-    tz_name = settings.salon.get("timezone") or "Europe/Moscow"
-    try:
-        return datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
-
-
 def calculate_assignment_deadline(booking_date: date) -> datetime:
     now_m = get_moscow_now()
     if booking_date == now_m.date():
@@ -42,164 +35,6 @@ def calculate_assignment_deadline(booking_date: date) -> datetime:
     else:
         timeout_mins = int(settings.salon.get("timeout_future_minutes", 30))
     return now_m + timedelta(minutes=timeout_mins)
-
-
-def add_minutes(t: time, minutes: int) -> time:
-    dummy_dt = datetime.combine(date.today(), t) + timedelta(minutes=minutes)
-    return dummy_dt.time()
-
-
-async def get_available_slots(
-    session: AsyncSession,
-    master_id: Optional[int],
-    service_id: int,
-    target_date: date,
-    now_override: Optional[datetime] = None,
-    include_unavailable: bool = False,
-    ignore_lead_time: bool = False,
-) -> List[Dict[str, Any]]:
-    # If master_id is 0 or None, find slots across ANY active master ("Любой мастер")
-    if not master_id:
-        active_masters = await _get_masters_sorted_by_daily_load(session, target_date)
-        if not active_masters:
-            return []
-
-        slot_map: Dict[str, Dict[str, Any]] = {}
-        for m in active_masters:
-            m_slots = await get_available_slots(
-                session=session,
-                master_id=m.id,
-                service_id=service_id,
-                target_date=target_date,
-                now_override=now_override,
-                include_unavailable=include_unavailable,
-                ignore_lead_time=ignore_lead_time,
-            )
-            for s in m_slots:
-                st = s["start_time"]
-                is_avail = s.get("available", True)
-                if st not in slot_map:
-                    slot_copy = dict(s)
-                    slot_copy["master_id"] = m.id if is_avail else 0
-                    slot_copy["master_name"] = m.full_name if is_avail else ""
-                    slot_map[st] = slot_copy
-                elif is_avail and not slot_map[st].get("available", True):
-                    # Upgrade from unavailable to available with this free master
-                    slot_copy = dict(s)
-                    slot_copy["master_id"] = m.id
-                    slot_copy["master_name"] = m.full_name
-                    slot_map[st] = slot_copy
-
-        return [slot_map[k] for k in sorted(slot_map.keys())]
-
-    # 1. Fetch master and service
-    master = (await session.execute(
-        select(Master).where(
-            Master.id == master_id,
-            Master.is_active.is_(True),
-            Master.archived_at.is_(None),
-        )
-    )).scalar_one_or_none()
-
-    service = (await session.execute(
-        select(Service).where(
-            Service.id == service_id,
-            Service.is_active.is_(True),
-            Service.archived_at.is_(None),
-        )
-    )).scalar_one_or_none()
-
-    if not master or not service:
-        return []
-
-    # 2. Salon operational limits
-    start_hour = int(settings.booking.get("work_start_hour", 10))
-    end_hour = int(settings.booking.get("work_end_hour", 21))
-    step_minutes = int(settings.booking.get("slot_step_minutes", 30))
-    duration_minutes = service.duration_minutes
-
-    work_start = time(start_hour, 0)
-    work_end = time(end_hour, 0)
-
-    # 3. Fetch all active bookings for this master on this date
-    res_bookings = await session.execute(
-        select(Booking).where(
-            Booking.master_id == master_id,
-            Booking.booking_date == target_date,
-            Booking.status.in_(ACTIVE_BOOKING_STATUSES),
-        )
-    )
-    existing_bookings = res_bookings.scalars().all()
-
-    # 4. Fetch blocked intervals
-    res_blocks = await session.execute(
-        select(BlockedInterval).where(
-            BlockedInterval.master_id == master_id,
-            BlockedInterval.booking_date == target_date,
-        )
-    )
-    blocked_intervals = res_blocks.scalars().all()
-
-    # 5. Current time check for today
-    current_dt = now_override or get_moscow_now()
-    if target_date < current_dt.date():
-        return []
-    is_today = (target_date == current_dt.date())
-    min_lead_minutes = 0 if ignore_lead_time else int(settings.booking.get("min_lead_minutes", 30))
-
-    slots = []
-    cursor_dt = datetime.combine(target_date, work_start)
-    work_end_dt = datetime.combine(target_date, work_end)
-
-    while cursor_dt + timedelta(minutes=duration_minutes) <= work_end_dt:
-        slot_start_time = cursor_dt.time()
-        slot_end_time = (cursor_dt + timedelta(minutes=duration_minutes)).time()
-
-        # Check if in past
-        if is_today:
-            earliest_allowed = current_dt + timedelta(minutes=min_lead_minutes)
-            if cursor_dt < earliest_allowed:
-                cursor_dt += timedelta(minutes=step_minutes)
-                continue
-
-        # Check overlapping bookings: [slot_start, slot_end) vs [b_start, b_end)
-        has_booking_conflict = False
-        for b in existing_bookings:
-            if slot_start_time < b.end_time and slot_end_time > b.start_time:
-                has_booking_conflict = True
-                break
-
-        # Check overlapping blocked intervals
-        has_block_conflict = False
-        if not has_booking_conflict:
-            for blk in blocked_intervals:
-                if slot_start_time < blk.end_time and slot_end_time > blk.start_time:
-                    has_block_conflict = True
-                    break
-
-        if has_booking_conflict or has_block_conflict:
-            if include_unavailable:
-                slots.append({
-                    "start_time": slot_start_time.strftime("%H:%M"),
-                    "end_time": slot_end_time.strftime("%H:%M"),
-                    "duration_minutes": duration_minutes,
-                    "available": False,
-                    "reason": "booked" if has_booking_conflict else "break",
-                })
-            cursor_dt += timedelta(minutes=step_minutes)
-            continue
-
-        slots.append({
-            "start_time": slot_start_time.strftime("%H:%M"),
-            "end_time": slot_end_time.strftime("%H:%M"),
-            "duration_minutes": duration_minutes,
-            "available": True,
-            "reason": None,
-        })
-
-        cursor_dt += timedelta(minutes=step_minutes)
-
-    return slots
 
 
 async def create_booking(
@@ -232,12 +67,14 @@ async def create_booking(
             all_masters = await _get_masters_sorted_by_daily_load(session, booking_date)
             chosen_master = None
             st_str = start_time.strftime("%H:%M")
+            now_override = get_moscow_now()
             for cand in all_masters:
                 cand_slots = await get_available_slots(
                     session=session,
                     master_id=cand.id,
                     service_id=service_id,
                     target_date=booking_date,
+                    now_override=now_override,
                     ignore_lead_time=ignore_lead_time,
                 )
                 if any(s["start_time"] == st_str for s in cand_slots):
@@ -465,8 +302,10 @@ async def confirm_booking(
 
         booking.status = "confirmed"
         booking.confirmed_at = datetime.now(timezone.utc)
+        booking.assignment_deadline = None
+        booking.client_reassign_deadline = None
         await session.commit()
-        await session.refresh(booking, attribute_names=["status", "confirmed_at"])
+        await session.refresh(booking, attribute_names=["status", "confirmed_at", "assignment_deadline", "client_reassign_deadline"])
         logger.info(f"Booking #{booking.id} confirmed by admin {admin_telegram_id}")
         return booking
 
@@ -567,6 +406,8 @@ async def claim_booking_by_master(
         booking.master_id = master.id
         booking.status = "confirmed"
         booking.confirmed_at = datetime.now(timezone.utc)
+        booking.assignment_deadline = None
+        booking.client_reassign_deadline = None
         await session.commit()
         await session.refresh(booking)
         logger.info(f"Booking #{booking.id} claimed by master {master.full_name} (tg: {master_telegram_id})")
@@ -600,6 +441,9 @@ async def decline_booking_by_master(
         if not booking:
             return False, "Запись не найдена", None
 
+        if booking.status not in ("pending", "confirmed"):
+            return False, f"Нельзя отклонить заказ в статусе '{booking.status}'", booking
+
         if booking.master_id != master.id:
             if booking.is_any_master:
                 # Мастер не назначен персонально, но получил броадкаст и отказывается от заявки
@@ -612,9 +456,6 @@ async def decline_booking_by_master(
                 return True, "declined_broadcast", booking
             return False, "Вы не являетесь назначенным мастером этой записи", booking
 
-        if booking.status not in ("pending", "confirmed"):
-            return False, f"Нельзя отклонить заказ в статусе '{booking.status}'", booking
-
         # Append master.id to declined list
         cur_declined = [int(x) for x in (booking.declined_master_ids or "").split(",") if x.strip().isdigit()]
         if master.id not in cur_declined:
@@ -624,8 +465,6 @@ async def decline_booking_by_master(
 
         if booking.is_any_master:
             # "Любой мастер": return back to search among other free masters
-            booking.status = "pending"
-            booking.assignment_deadline = calculate_assignment_deadline(booking.booking_date)
             other_free = await get_free_active_masters(
                 session,
                 booking.booking_date,
@@ -635,14 +474,20 @@ async def decline_booking_by_master(
                 exclude_booking_id=booking.id,
             )
             if other_free:
+                booking.status = "pending"
+                booking.assignment_deadline = calculate_assignment_deadline(booking.booking_date)
                 booking.master_id = other_free[0].id
-            await session.commit()
-            await session.refresh(booking)
-            if not other_free:
-                logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). No other free masters left.")
+                await session.commit()
+                await session.refresh(booking)
+                logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). Status: pending.")
+                return True, "declined_any", booking
+            else:
+                booking.status = "cancelled_by_admin"
+                booking.assignment_deadline = None
+                await session.commit()
+                await session.refresh(booking)
+                logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). No other free masters left. Status: cancelled_by_admin.")
                 return True, "all_declined", booking
-            logger.info(f"Master {master.full_name} declined booking #{booking.id} (any_master). Status: pending.")
-            return True, "declined_any", booking
         else:
             # Specific master chosen by client: give client 10 minutes to choose another or auto-reassign
             booking.status = "awaiting_client_choice"
@@ -677,11 +522,6 @@ async def client_accept_any_master(
         if booking.status != "awaiting_client_choice":
             return False, f"Нельзя перевести запись в поиск мастера из статуса '{booking.status}'", booking
 
-        booking.is_any_master = True
-        booking.status = "pending"
-        booking.client_reassign_deadline = None
-        booking.assignment_deadline = calculate_assignment_deadline(booking.booking_date)
-
         cur_declined = [int(x) for x in (booking.declined_master_ids or "").split(",") if x.strip().isdigit()]
         other_free = await get_free_active_masters(
             session,
@@ -691,8 +531,14 @@ async def client_accept_any_master(
             exclude_ids=cur_declined,
             exclude_booking_id=booking.id,
         )
-        if other_free:
-            booking.master_id = other_free[0].id
+        if not other_free:
+            return False, "На выбранное время нет других свободных мастеров. Пожалуйста, выберите другое время или отмените запись.", booking
+
+        booking.is_any_master = True
+        booking.status = "pending"
+        booking.client_reassign_deadline = None
+        booking.assignment_deadline = calculate_assignment_deadline(booking.booking_date)
+        booking.master_id = other_free[0].id
 
         await session.commit()
         await session.refresh(booking)
@@ -721,6 +567,9 @@ async def admin_reassign_booking(
         )).scalar_one_or_none()
         if not booking:
             raise ValueError("Запись не найдена")
+
+        if booking.status not in ("pending", "confirmed", "awaiting_client_choice"):
+            raise ValueError(f"Невозможно переназначить запись в статусе '{booking.status}'")
 
         master = (await session.execute(
             select(Master).where(
@@ -790,10 +639,6 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
         )
         awaiting_list = list(res_awaiting.scalars().all())
         for b in awaiting_list:
-            b.is_any_master = True
-            b.status = "pending"
-            b.client_reassign_deadline = None
-            b.assignment_deadline = calculate_assignment_deadline(b.booking_date)
             cur_declined = [int(x) for x in (b.declined_master_ids or "").split(",") if x.strip().isdigit()]
             other_free = await get_free_active_masters(
                 session,
@@ -804,20 +649,40 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
                 exclude_booking_id=b.id,
             )
             if other_free:
+                b.is_any_master = True
+                b.status = "pending"
+                b.client_reassign_deadline = None
+                b.assignment_deadline = calculate_assignment_deadline(b.booking_date)
                 b.master_id = other_free[0].id
-            await session.commit()
-            await session.refresh(b)
-            processed_count += 1
-            logger.info(f"Booking #{b.id} client reassign deadline expired -> switched to pending broadcast")
+                await session.commit()
+                await session.refresh(b)
+                processed_count += 1
+                logger.info(f"Booking #{b.id} client reassign deadline expired -> switched to pending broadcast")
 
-            if bot:
-                notifications_to_send.append((
-                    "awaiting_broadcast",
-                    {
-                        "booking_id": b.id,
-                        "other_free": list(other_free),
-                    },
-                ))
+                if bot:
+                    notifications_to_send.append((
+                        "awaiting_broadcast",
+                        {
+                            "booking_id": b.id,
+                            "other_free": list(other_free),
+                        },
+                    ))
+            else:
+                b.status = "cancelled_by_admin"
+                b.client_reassign_deadline = None
+                b.assignment_deadline = None
+                await session.commit()
+                await session.refresh(b)
+                processed_count += 1
+                logger.warning(f"Booking #{b.id} client reassign deadline expired with no free masters. Status: cancelled_by_admin.")
+
+                if bot:
+                    notifications_to_send.append((
+                        "unassigned_alert",
+                        {
+                            "booking_id": b.id,
+                        },
+                    ))
 
         # 2. Process pending bookings where assignment_deadline expired
         res_pending = await session.execute(
@@ -868,11 +733,12 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
                         },
                     ))
             else:
-                # Alert owner that order is pending without master
+                b.status = "cancelled_by_admin"
                 b.assignment_deadline = None
                 await session.commit()
+                await session.refresh(b, attribute_names=["status", "assignment_deadline"])
                 processed_count += 1
-                logger.warning(f"Booking #{b.id} expired without auto-assignment. Alerting owners.")
+                logger.warning(f"Booking #{b.id} expired without auto-assignment. Cancelled and alerting owners.")
                 if bot:
                     notifications_to_send.append((
                         "unassigned_alert",
@@ -883,7 +749,7 @@ async def process_expired_bookings(session: AsyncSession, bot: Any) -> int:
 
     # Network I/O is performed completely outside _booking_lock to prevent blocking concurrent bookings
     if bot and notifications_to_send:
-        from core.booking_notifier import dispatch_expired_booking_notifications
+        from notifiers.booking_notifier import dispatch_expired_booking_notifications
         await dispatch_expired_booking_notifications(session, bot, notifications_to_send)
 
     return processed_count

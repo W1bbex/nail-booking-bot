@@ -5,7 +5,7 @@ import time
 from urllib.parse import parse_qsl
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +20,32 @@ logger = setup_logger("security")
 MAX_AUTH_AGE_SECONDS = 86400  # 24 hours
 
 
-def _is_proxied_external(x_forwarded_for: Optional[str], x_real_ip: Optional[str]) -> bool:
-    for raw in (x_forwarded_for, x_real_ip):
-        if isinstance(raw, str) and raw.strip():
-            ip = raw.split(",")[0].strip().lower()
-            if ip not in ("127.0.0.1", "::1", "localhost", "testclient"):
+TRUSTED_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _is_proxied_external(
+    request: Optional[Request] = None,
+    x_forwarded_for: Optional[str] = None,
+    x_real_ip: Optional[str] = None,
+) -> bool:
+    """Detects whether the incoming request originated from an external network."""
+    # 1. Direct socket peer check
+    if request and request.client and request.client.host:
+        if request.client.host.strip().lower() not in TRUSTED_LOCAL_HOSTS:
+            return True
+
+    # 2. X-Real-IP check
+    if isinstance(x_real_ip, str) and x_real_ip.strip():
+        if x_real_ip.strip().lower() not in TRUSTED_LOCAL_HOSTS:
+            return True
+
+    # 3. X-Forwarded-For chain inspection (any external hop indicates external traversal)
+    if isinstance(x_forwarded_for, str) and x_forwarded_for.strip():
+        for raw in x_forwarded_for.split(","):
+            cleaned = raw.strip().lower()
+            if cleaned and cleaned not in TRUSTED_LOCAL_HOSTS:
                 return True
+
     return False
 
 
@@ -65,6 +85,7 @@ def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any
 
 
 async def get_current_user(
+    request: Request = None,
     x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
     x_dev_user_id: Optional[str] = Header(None, alias="X-Dev-User-Id"),
     x_forwarded_for: Optional[str] = Header(None, alias="X-Forwarded-For"),
@@ -74,17 +95,18 @@ async def get_current_user(
     telegram_id: Optional[int] = None
     full_name: str = "Гость студии"
 
-    # 1. Dev Mode fallback for local browser preview (never allowed via external reverse proxy)
+    # 1. Dev/Demo Mode handling
     init_data_str = x_telegram_init_data if isinstance(x_telegram_init_data, str) else None
-    is_external_proxy = _is_proxied_external(x_forwarded_for, x_real_ip)
-    if settings.dev_mode and not is_external_proxy and (not init_data_str or init_data_str.startswith("dev")):
+    is_external = _is_proxied_external(request, x_forwarded_for, x_real_ip)
+
+    if settings.dev_mode and not is_external and (not init_data_str or init_data_str.startswith("dev")):
         if x_dev_user_id and x_dev_user_id.isdigit():
             telegram_id = int(x_dev_user_id)
             full_name = f"Тестовый пользователь #{telegram_id}"
         else:
             # Default to first admin in dev mode if requested, or standard client
             telegram_id = settings.admin_telegram_ids[0] if settings.admin_telegram_ids else 999000111
-            full_name = "Тестовый мастер (Dev)"
+            full_name = "Тестовый администратор (Dev)"
     else:
         # 2. Production cryptographic verification
         if (not settings.bot_token or "AAFakeToken" in settings.bot_token
@@ -142,8 +164,11 @@ async def get_current_user(
         elif user.role == "admin":
             # Demoted from admin: restore master role if bound to an active Master, otherwise client
             bound_master = (await db.execute(
-                select(Master).where(Master.telegram_id == telegram_id, Master.archived_at.is_(None))
-            )).scalar_one_or_none()
+                select(Master).where(
+                    Master.telegram_id == telegram_id,
+                    Master.archived_at.is_(None)
+                ).order_by(Master.id.desc())
+            )).scalars().first()
             user.role = "master" if bound_master else "client"
             await db.commit()
             await db.refresh(user)
@@ -165,7 +190,6 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
 
 def deterministic_virtual_telegram_id(phone: str) -> int:
     """Generates a deterministic negative virtual telegram ID from client phone."""
-    import hashlib
     clean = "".join(ch for ch in (phone or "") if ch.isdigit())
     if not clean:
         clean = "0000000000"

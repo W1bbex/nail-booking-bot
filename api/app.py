@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.routes_admin import router as admin_router
@@ -37,7 +37,18 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Dev-User-Id", "Authorization", "Accept", "Accept-Language"],
+    allow_headers=[
+        "Content-Type",
+        "X-Telegram-Init-Data",
+        "X-Dev-User-Id",
+        "Authorization",
+        "Accept",
+        "Accept-Language",
+        "Cache-Control",
+        "Pragma",
+        "If-None-Match",
+        "X-Requested-With",
+    ],
 )
 
 # Mount API routers
@@ -47,6 +58,23 @@ app.include_router(admin_router)
 # Mount Telegram Mini App static assets
 if MINIAPP_DIR.is_dir():
     app.mount("/miniapp", StaticFiles(directory=str(MINIAPP_DIR), html=True), name="miniapp")
+
+
+@app.exception_handler(PermissionError)
+async def handle_permission_error(request: Request, exc: PermissionError) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(LookupError)
+async def handle_lookup_error(request: Request, exc: LookupError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(ValueError)
+async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
+    msg = str(exc)
+    status_code = 404 if "не найден" in msg.lower() else 400
+    return JSONResponse(status_code=status_code, content={"detail": msg})
 
 
 @app.get("/", include_in_schema=False)

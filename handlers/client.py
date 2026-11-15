@@ -6,11 +6,11 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import selectinload
 
 from core.booking_service import cancel_booking
-from core.booking_notifier import sync_booking_messages
+from notifiers.booking_notifier import sync_booking_messages
 from core.config import settings
 from core.database import get_session
 from core.logger import setup_logger
-from core.models import Booking, Service, User
+from core.models import Booking, Master, Service, User
 from ui.dashboards import (
     about_dashboard,
     contact_dashboard,
@@ -34,14 +34,22 @@ client_router = Router(name="client")
 async def handle_start(message: Message) -> None:
     is_admin = settings.is_admin(message.from_user.id)
     bound_master = None
-    if message.from_user and message.from_user.username:
-        async with get_session() as session:
+    async with get_session() as session:
+        if message.from_user and message.from_user.username:
             from core.catalog_service import bind_master_by_telegram
             bound_master = await bind_master_by_telegram(
                 session=session,
                 telegram_id=message.from_user.id,
                 username=message.from_user.username,
             )
+        if not bound_master and message.from_user:
+            res = await session.execute(
+                select(Master).where(
+                    Master.telegram_id == message.from_user.id,
+                    Master.archived_at.is_(None),
+                ).order_by(Master.id.desc())
+            )
+            bound_master = res.scalars().first()
 
     if bound_master and is_admin:
         from ui.dashboards import master_start_dashboard
@@ -244,6 +252,19 @@ async def cb_client_cancel_confirm(call: CallbackQuery) -> None:
             kb = back_to_menu_keyboard()
             await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
             await call.answer("Запись отменена")
+        except ValueError as val_err:
+            if "уже была отменена" in str(val_err).lower():
+                await call.answer("Запись уже отменена")
+                try:
+                    await call.message.edit_text(
+                        f"<b>Запись #{booking_id} уже была отменена ранее.</b>",
+                        reply_markup=back_to_menu_keyboard(),
+                        parse_mode="HTML",
+                    )
+                except TelegramBadRequest:
+                    pass
+                return
+            await call.answer(f"Ошибка: {val_err}", show_alert=True)
         except Exception as e:
             await call.answer(f"Ошибка: {e}", show_alert=True)
 
@@ -253,7 +274,7 @@ async def cb_client_accept_any(call: CallbackQuery) -> None:
     parts = call.data.split(":")
     booking_id = int(parts[1])
     async with get_session() as session:
-        from core.booking_notifier import record_booking_message, sync_booking_messages
+        from notifiers.booking_notifier import record_booking_message, sync_booking_messages
         from core.booking_service import client_accept_any_master
         from core.catalog_service import get_free_active_masters
         from ui.dashboards import master_order_broadcast_card
@@ -267,6 +288,7 @@ async def cb_client_accept_any(call: CallbackQuery) -> None:
             await call.message.edit_text(
                 f"<b>Заявка #{booking.id}</b>\n\n"
                 f"Мы ищем для вас свободного мастера. Как только мастер подтвердит визит, вам придёт уведомление!",
+                reply_markup=back_to_menu_keyboard(),
                 parse_mode="HTML",
             )
             # Sync existing messages
