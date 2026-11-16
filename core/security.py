@@ -56,7 +56,6 @@ def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any
 
     pairs = dict(parse_qsl(init_data, keep_blank_values=True))
     received_hash = pairs.pop("hash", None)
-    pairs.pop("signature", None)
     if not received_hash:
         raise ValueError("Отсутствует контрольный хеш hash в initData")
 
@@ -188,10 +187,25 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
         )
     return user
 
-def deterministic_virtual_telegram_id(phone: str) -> int:
+def canonical_phone_digits(phone: str) -> str:
+    """Extracts digits and normalizes Russian 11-digit '8...' numbers to '7...'."""
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("8"):
+        return "7" + digits[1:]
+    return digits
+
+
+def normalize_phone(raw: str) -> str:
+    """Normalizes a phone string into canonical E.164-like form when possible."""
+    digits = canonical_phone_digits(raw)
+    if digits:
+        return "+" + digits
+    return (raw or "").strip()
+
+
+def deterministic_virtual_telegram_id(phone: str, salt: str = "") -> int:
     """Generates a deterministic negative virtual telegram ID from client phone."""
-    clean = "".join(ch for ch in (phone or "") if ch.isdigit())
-    if not clean:
-        clean = "0000000000"
-    digest = int(hashlib.sha256(clean.encode("utf-8")).hexdigest()[:8], 16)
-    return -(digest % 1000000000 + 1)
+    clean = canonical_phone_digits(phone) or "0000000000"
+    seed = f"{clean}#{salt}" if salt else clean
+    digest = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:15], 16)
+    return -(digest % (10**15) + 1)

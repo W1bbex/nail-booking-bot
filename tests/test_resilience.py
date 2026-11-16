@@ -90,6 +90,68 @@ def test_production_auth_valid_and_tampered():
         validate_telegram_init_data(expired_data, token)
 
 
+def test_validate_telegram_init_data_preserves_signature_in_hmac():
+    """Verify initData carrying third-party signature validates HMAC including signature."""
+    token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    user_payload = {"id": 987654321, "first_name": "Anna", "username": "anna_nail"}
+    auth_date = int(time.time())
+
+    signed_params = {
+        "auth_date": str(auth_date),
+        "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
+        "signature": "mock-ed25519-signature-token",
+        "user": json.dumps(user_payload, separators=(",", ":")),
+    }
+    check_string = "\n".join(f"{k}={v}" for k, v in sorted(signed_params.items()))
+    secret_key = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+    calc_hash = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    valid_with_sig = urlencode({**signed_params, "hash": calc_hash})
+    parsed = validate_telegram_init_data(valid_with_sig, token)
+    assert parsed["user"]["id"] == 987654321
+    assert parsed["signature"] == "mock-ed25519-signature-token"
+
+    # Signing without signature while passing signature in payload must fail
+    unsigned_params = {k: v for k, v in signed_params.items() if k != "signature"}
+    bad_check = "\n".join(f"{k}={v}" for k, v in sorted(unsigned_params.items()))
+    bad_hash = hmac.new(secret_key, bad_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    forged_sig = urlencode({**signed_params, "hash": bad_hash})
+    with pytest.raises(ValueError, match="не прошла проверку подлинности"):
+        validate_telegram_init_data(forged_sig, token)
+
+
+def test_alembic_initial_migration_creates_full_schema_on_empty_db(tmp_path, monkeypatch):
+    """Verify initial Alembic migration upgrades a fresh empty database to head cleanly."""
+    import sqlite3
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parent.parent
+    db_path = tmp_path / "alembic_fresh.db"
+    monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{db_path}")
+
+    cfg = Config(str(repo_root / "alembic.ini"))
+    command.upgrade(cfg, "head")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        assert {"users", "masters", "services", "bookings", "blocked_intervals", "booking_messages"} <= tables
+        booking_cols = {row[1] for row in conn.execute("PRAGMA table_info(bookings)").fetchall()}
+        assert {"price", "is_any_master", "declined_master_ids"} <= booking_cols
+        indexes = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        }
+        assert "idx_unique_active_master_slot" in indexes
+    finally:
+        conn.close()
+
+
 @pytest.mark.asyncio
 async def test_integrity_error_re_raised_for_non_slot_failures(db_session, monkeypatch):
     """Verify that IntegrityError not related to slot uniqueness is re-raised and NOT masked as slot conflict."""
