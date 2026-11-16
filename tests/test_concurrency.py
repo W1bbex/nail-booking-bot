@@ -210,3 +210,70 @@ async def test_expired_bookings_logs_notification_errors(db_session: AsyncSessio
         count = await process_expired_bookings(db_session, mock_bot)
         assert count >= 1
         assert any("Telegram API down" in record.message or "Failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_resolve_manual_client_telegram_id_isolates_hash_collisions(db_session: AsyncSession, monkeypatch):
+    from sqlalchemy import select
+    from core.booking_service import resolve_manual_client_telegram_id
+    from core.models import User
+
+    colliding_id = -42424242
+
+    def fake_virtual_id(phone: str, salt: str = "") -> int:
+        if not salt:
+            return colliding_id
+        return colliding_id - int(salt)
+
+    monkeypatch.setattr("core.booking_service.deterministic_virtual_telegram_id", fake_virtual_id)
+
+    target_date = date.today() + timedelta(days=4)
+    tg1 = await resolve_manual_client_telegram_id(db_session, "+79001112233")
+    b1 = await create_booking(
+        session=db_session,
+        client_telegram_id=tg1,
+        client_name="Client One",
+        client_phone="+79001112233",
+        master_id=1,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(10, 0),
+        ignore_lead_time=True,
+    )
+
+    tg2 = await resolve_manual_client_telegram_id(db_session, "+79004445566")
+    assert tg2 != tg1
+    assert tg2 < 0
+
+    b2 = await create_booking(
+        session=db_session,
+        client_telegram_id=tg2,
+        client_name="Client Two",
+        client_phone="+79004445566",
+        master_id=1,
+        service_id=1,
+        booking_date=target_date,
+        start_time=time(12, 0),
+        ignore_lead_time=True,
+    )
+
+    assert b1.client_user_id != b2.client_user_id
+    u1 = (await db_session.execute(select(User).where(User.id == b1.client_user_id))).scalar_one()
+    u2 = (await db_session.execute(select(User).where(User.id == b2.client_user_id))).scalar_one()
+    assert u1.full_name == "Client One"
+    assert u1.phone == "+79001112233"
+    assert u2.full_name == "Client Two"
+    assert u2.phone == "+79004445566"
+
+    with pytest.raises(ValueError, match="Конфликт виртуального профиля"):
+        await create_booking(
+            session=db_session,
+            client_telegram_id=tg1,
+            client_name="Impostor",
+            client_phone="+79004445566",
+            master_id=1,
+            service_id=1,
+            booking_date=target_date,
+            start_time=time(14, 0),
+            ignore_lead_time=True,
+        )

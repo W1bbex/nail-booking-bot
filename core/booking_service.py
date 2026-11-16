@@ -11,6 +11,7 @@ from core.catalog_service import _get_masters_sorted_by_daily_load, get_free_act
 from core.config import settings
 from core.logger import setup_logger
 from core.models import BlockedInterval, Booking, Master, Service, User
+from core.security import canonical_phone_digits, deterministic_virtual_telegram_id, normalize_phone
 from core.slot_service import add_minutes, get_available_slots, get_moscow_now
 
 logger = setup_logger("booking_service")
@@ -26,6 +27,40 @@ def _mask_phone(phone: str) -> str:
     if len(digits) >= 6:
         return f"+{digits[:2]}***{digits[-2:]}"
     return "***"
+
+
+async def resolve_manual_client_telegram_id(session: AsyncSession, phone: str) -> int:
+    """Finds an existing client by normalized phone or allocates a collision-free virtual ID."""
+    clean_phone = (phone or "").strip()
+    norm_phone = normalize_phone(clean_phone)
+    target_digits = canonical_phone_digits(clean_phone)
+
+    phone_candidates = {p for p in (norm_phone, clean_phone) if p}
+    if len(target_digits) == 11 and target_digits.startswith("7"):
+        phone_candidates.add("8" + target_digits[1:])
+        phone_candidates.add("+8" + target_digits[1:])
+        phone_candidates.add(target_digits)
+
+    if phone_candidates:
+        existing_client = (
+            await session.execute(select(User).where(User.phone.in_(phone_candidates)))
+        ).scalars().first()
+        if existing_client is not None:
+            return existing_client.telegram_id
+
+    seed_phone = norm_phone or clean_phone
+    for attempt in range(1000):
+        salt = "" if attempt == 0 else str(attempt)
+        candidate_id = deterministic_virtual_telegram_id(seed_phone, salt=salt)
+        holder = (
+            await session.execute(select(User).where(User.telegram_id == candidate_id))
+        ).scalar_one_or_none()
+        if holder is None:
+            return candidate_id
+        if target_digits and canonical_phone_digits(holder.phone or "") == target_digits:
+            return holder.telegram_id
+
+    raise ValueError("Не удалось выделить уникальный виртуальный ID клиента")
 
 
 def calculate_assignment_deadline(booking_date: date) -> datetime:
@@ -181,6 +216,13 @@ async def create_booking(
             session.add(user)
             await session.flush()
         else:
+            if (
+                user.telegram_id < 0
+                and user.phone
+                and clean_phone
+                and canonical_phone_digits(user.phone) != canonical_phone_digits(clean_phone)
+            ):
+                raise ValueError("Конфликт виртуального профиля клиента: номер телефона не совпадает")
             # Protect admin and master profiles from being overwritten with client details
             if not settings.is_admin(user.telegram_id) and user.role not in ("admin", "master"):
                 if clean_name and user.full_name != clean_name:

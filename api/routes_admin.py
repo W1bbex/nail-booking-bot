@@ -16,7 +16,9 @@ from core.booking_service import (
     confirm_booking,
     create_booking,
     get_moscow_now,
+    resolve_manual_client_telegram_id,
 )
+from core.security import normalize_phone
 from core.catalog_service import (
     block_all_masters_time_interval,
     block_time_interval,
@@ -128,15 +130,6 @@ def _handle_admin_service_error(e: Exception) -> HTTPException:
     if isinstance(e, LookupError) or "не найден" in str(e).lower():
         return HTTPException(status_code=404, detail=str(e))
     return HTTPException(status_code=400, detail=str(e))
-
-
-def normalize_phone(raw: str) -> str:
-    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
-    if len(digits) == 11 and digits.startswith(("7", "8")):
-        return "+7" + digits[1:]
-    if digits:
-        return "+" + digits
-    return raw.strip()
 
 
 @router.get("/bookings")
@@ -692,11 +685,7 @@ async def api_admin_manual_booking(
     clean_name = payload.client_name.strip() or "Клиент"
 
     try:
-        existing_client = (await db.execute(
-            select(User).where((User.phone == norm_phone) | (User.phone == clean_phone))
-        )).scalars().first()
-        from core.security import deterministic_virtual_telegram_id
-        target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(norm_phone or clean_phone)
+        target_tg_id = await resolve_manual_client_telegram_id(db, norm_phone or clean_phone)
 
         booking = await create_booking(
             session=db,

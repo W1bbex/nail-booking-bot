@@ -13,12 +13,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
-from core.booking_service import confirm_booking, create_booking
+from core.booking_service import confirm_booking, create_booking, resolve_manual_client_telegram_id
 from core.config import settings
 from core.database import get_session
 from core.logger import setup_logger
 from core.models import Master, Service, User
-from core.security import deterministic_virtual_telegram_id
 from core.slot_service import get_available_slots, get_moscow_now
 from ui.dashboards import admin_booking_card
 from ui.formatters import escape, format_date
@@ -287,11 +286,7 @@ async def handle_input_manual_client_info(message: Message, state: FSMContext) -
 
     async with get_session() as session:
         try:
-            # Look up existing client by phone or assign virtual ID (never overwrite admin profile)
-            existing_client = (await session.execute(
-                select(User).where(User.phone == clean_phone)
-            )).scalar_one_or_none()
-            target_tg_id = existing_client.telegram_id if existing_client else deterministic_virtual_telegram_id(clean_phone)
+            target_tg_id = await resolve_manual_client_telegram_id(session, clean_phone)
 
             booking = await create_booking(
                 session=session,
