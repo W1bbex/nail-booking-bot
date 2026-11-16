@@ -853,5 +853,32 @@ async def test_slot_offered_with_45_minute_step_can_be_booked(db_session: AsyncS
     assert booking.start_time == time(11, 30)
 
 
+@pytest.mark.asyncio
+async def test_bind_master_by_telegram_refuses_hijack_of_already_bound_master(db_session: AsyncSession):
+    from core.catalog_service import bind_master_by_telegram
+    from core.models import Master, User
+
+    master = Master(
+        full_name="Анна Смирнова",
+        specialization="Маникюр",
+        experience_years=3,
+        telegram_username="@anna_master",
+        telegram_id=111222333,
+        is_active=True,
+    )
+    db_session.add(master)
+    await db_session.commit()
+
+    hijacked = await bind_master_by_telegram(db_session, telegram_id=999000111, username="anna_master")
+    assert hijacked is None
+
+    await db_session.refresh(master)
+    assert master.telegram_id == 111222333
+
+    user_res = await db_session.execute(select(User).where(User.telegram_id == 999000111))
+    assert user_res.scalar_one_or_none() is None
+
+
+
 
 

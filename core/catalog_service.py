@@ -458,6 +458,12 @@ async def bind_master_by_telegram(
     if not master:
         return None
 
+    if master.telegram_id is not None and master.telegram_id != telegram_id:
+        logger.warning(
+            f"Refusing to rebind Master #{master.id} (@{clean_name}) from telegram_id {master.telegram_id} to {telegram_id}"
+        )
+        return None
+
     master.telegram_id = telegram_id
     user_res = await session.execute(select(User).where(User.telegram_id == telegram_id))
     user = user_res.scalar_one_or_none()
