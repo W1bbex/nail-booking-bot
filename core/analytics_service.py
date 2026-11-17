@@ -13,12 +13,12 @@ def calculate_schedule_stats(bookings: Sequence[Booking]) -> Dict[str, Any]:
     Uses snapshotted booking price when available, falling back to service catalog price.
     """
     revenue = sum(
-        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
+        (b.price if b.price is not None else (b.service.price if b.service else 0.0))
         for b in bookings
         if b.status in ("confirmed", "completed")
     )
     expected_revenue = sum(
-        (b.price if (b.price is not None and b.price > 0) else (b.service.price if b.service else 0.0))
+        (b.price if b.price is not None else (b.service.price if b.service else 0.0))
         for b in bookings
         if b.status in ("confirmed", "completed", "pending")
     )

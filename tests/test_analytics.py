@@ -97,3 +97,32 @@ def test_calculate_schedule_stats_with_bookings():
 
 def test_admin_manual_booking_router_included():
     assert admin_manual_booking_router in admin_router.sub_routers
+
+
+def test_free_booking_snapshot_remains_zero_after_catalog_price_changes():
+    from ui.dashboards import get_booking_price
+
+    booking = Booking(price=0, status="completed", service=Service(price=2500))
+    stats = calculate_schedule_stats([booking])
+    assert stats["revenue"] == stats["expected_revenue"] == stats["avg_check"] == 0
+    assert get_booking_price(booking) == 0
+
+
+@pytest.mark.asyncio
+async def test_free_booking_snapshot_is_preserved_in_all_api_views(client, db_session):
+    from core.slot_service import get_moscow_now
+    from datetime import timedelta
+
+    day = get_moscow_now().date() + timedelta(days=2)
+    booking = Booking(client_user_id=1, master_id=1, service_id=1, booking_date=day,
+                      start_time=time(12), end_time=time(13), price=0, status="completed",
+                      client_name="Synthetic client", client_phone="synthetic-contact")
+    db_session.add(booking)
+    await db_session.commit()
+    admin = {"X-Dev-User-Id": "5568814893"}
+    schedule = (await client.get(f"/api/admin/schedule?date={day}", headers=admin)).json()
+    rows = (await client.get("/api/admin/bookings", headers=admin)).json()
+    mine = (await client.get("/api/bookings", headers={"X-Dev-User-Id": "999000101"})).json()
+    assert schedule["bookings"][0]["service_price"] == 0
+    assert schedule["stats"]["revenue"] == 0
+    assert rows[0]["service_price"] == mine[0]["service_price"] == 0

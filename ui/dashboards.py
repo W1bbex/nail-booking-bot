@@ -7,7 +7,7 @@ from ui.icons import tg_icon
 
 
 def get_booking_price(b: Booking) -> float:
-    if getattr(b, "price", None) is not None and b.price > 0:
+    if getattr(b, "price", None) is not None:
         return float(b.price)
     if getattr(b, "service", None) and getattr(b.service, "price", None) is not None:
         return float(b.service.price)
