@@ -1,5 +1,7 @@
 import json
+import sys
 from types import SimpleNamespace
+import pytest
 
 import launcher
 import console_mouse
@@ -33,6 +35,7 @@ def test_mouse_hit_only_accepts_menu_rows():
     assert menu_hit(8, 24, 0, 10, 4) is None
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console mouse handling")
 def test_first_click_selects_and_second_click_activates(monkeypatch):
     def mouse(y, pressed):
         return SimpleNamespace(event_type=2, event=SimpleNamespace(mouse=SimpleNamespace(
@@ -67,6 +70,7 @@ def test_first_click_selects_and_second_click_activates(monkeypatch):
     assert len(seen) == 3
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console mouse handling")
 def test_mouse_wheel_moves_selection(monkeypatch):
     wheel = SimpleNamespace(event_type=2, event=SimpleNamespace(mouse=SimpleNamespace(
         position=SimpleNamespace(x=10, y=6), buttons=(0xFF88 << 16), flags=4)))

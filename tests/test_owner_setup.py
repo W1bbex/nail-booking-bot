@@ -73,7 +73,8 @@ def test_username_filter_requires_matching_start(monkeypatch):
             return {}
         return updates
     monkeypatch.setattr(owner_setup, "api_call", api)
-    monkeypatch.setattr("msvcrt.kbhit", lambda: False)
+    if sys.platform == "win32":
+        monkeypatch.setattr("msvcrt.kbhit", lambda: False)
     def no_confirmation(prompt):
         raise AssertionError("Matched username must not require another confirmation")
     monkeypatch.setattr("builtins.input", no_confirmation)

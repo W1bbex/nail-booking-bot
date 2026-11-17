@@ -65,6 +65,7 @@ def test_long_paste_and_backspace_never_wrap_counter(monkeypatch, capsys):
     assert "111 / ~46" in output and "110 / ~46" in output
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console key handling")
 def test_escape_cancels_secret_input_without_echo(monkeypatch, capsys):
     import msvcrt
     import setup_wizard
@@ -76,6 +77,7 @@ def test_escape_cancels_secret_input_without_echo(monkeypatch, capsys):
     assert "sec" not in capsys.readouterr().out
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console clipboard input")
 def test_ctrl_v_pastes_token_without_exposing_it(monkeypatch, capsys):
     import msvcrt
     import setup_wizard
@@ -90,6 +92,7 @@ def test_ctrl_v_pastes_token_without_exposing_it(monkeypatch, capsys):
     assert "*************" in output
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console key handling")
 def test_token_entry_ignores_accidental_spaces(monkeypatch, capsys):
     import msvcrt
     import setup_wizard
