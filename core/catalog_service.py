@@ -3,12 +3,11 @@ import json
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from zoneinfo import ZoneInfo
 from sqlalchemy import and_, func, not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from core.config import CONFIG_PATH, settings
+from core.config import CONFIG_PATH, get_salon_timezone, settings
 from core.logger import setup_logger
 from core.models import BlockedInterval, Booking, Master, Service, User
 
@@ -24,13 +23,12 @@ def _get_booking_lock() -> asyncio.Lock:
 
 def get_moscow_now() -> datetime:
     tz_name = settings.salon.get("timezone") or "Europe/Moscow"
-    try:
-        return datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
+    return datetime.now(get_salon_timezone(tz_name)).replace(tzinfo=None)
 
 
 def update_salon_settings(salon_data: Dict[str, Any]) -> Dict[str, Any]:
+    if "timezone" in salon_data:
+        get_salon_timezone(salon_data["timezone"])
     # Update in-memory settings
     settings.salon.update(salon_data)
 

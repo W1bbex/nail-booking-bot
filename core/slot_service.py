@@ -3,14 +3,13 @@ Slot calculation and schedule availability service.
 Pure domain logic: calculating free intervals, handling working hours,
 service duration matching, and master load balancing.
 """
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
-from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.catalog_service import _get_masters_sorted_by_daily_load
-from core.config import settings
+from core.config import get_salon_timezone, settings
 from core.logger import setup_logger
 from core.models import BlockedInterval, Booking, Master, Service
 
@@ -21,10 +20,7 @@ ACTIVE_BOOKING_STATUSES = ["pending", "confirmed", "awaiting_client_choice"]
 
 def get_moscow_now() -> datetime:
     tz_name = settings.salon.get("timezone") or "Europe/Moscow"
-    try:
-        return datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
+    return datetime.now(get_salon_timezone(tz_name)).replace(tzinfo=None)
 
 
 def add_minutes(t: time, minutes: int) -> time:

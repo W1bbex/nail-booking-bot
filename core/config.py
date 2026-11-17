@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 
 logger = logging.getLogger("core.config")
@@ -18,6 +19,17 @@ DB_PATH = DATA_DIR / "studio.db"
 
 # Load environment variables
 load_dotenv(dotenv_path=ENV_PATH)
+
+
+def get_salon_timezone(name: str) -> ZoneInfo:
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Часовой пояс студии должен быть непустым именем IANA")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"Часовой пояс студии {name!r} недоступен. Проверьте имя IANA и установите зависимость tzdata."
+        ) from exc
 
 
 class Settings:
@@ -39,6 +51,7 @@ class Settings:
                 raise ValueError("Корневой элемент конфигурации должен быть JSON-объектом")
 
             self.salon: Dict[str, Any] = raw_config.get("salon") if isinstance(raw_config.get("salon"), dict) else {}
+            get_salon_timezone(self.salon.get("timezone") or "Europe/Moscow")
             self.server: Dict[str, Any] = raw_config.get("server") if isinstance(raw_config.get("server"), dict) else {}
             self.booking: Dict[str, Any] = raw_config.get("booking") if isinstance(raw_config.get("booking"), dict) else {}
 
