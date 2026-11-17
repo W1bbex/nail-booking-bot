@@ -95,6 +95,20 @@ async def sync_booking_messages(
                     reply_markup=kb,
                     parse_mode="HTML",
                 )
+            elif tm.kind == "master_card":
+                is_assigned = booking.master is not None and booking.master.telegram_id == tm.chat_id
+                is_actionable = booking.status in ("pending", "confirmed")
+                kb = master_assigned_keyboard(booking.id) if is_assigned and is_actionable else None
+                title = header
+                if not is_assigned and is_actionable:
+                    title = f"<b>Заявка #{booking.id} переназначена другому мастеру</b>"
+                await bot.edit_message_text(
+                    chat_id=tm.chat_id,
+                    message_id=tm.message_id,
+                    text=f"{title}\n\n{admin_booking_card(booking)}",
+                    reply_markup=kb,
+                    parse_mode="HTML",
+                )
             elif tm.kind == "master_claim":
                 if booking.status == "confirmed":
                     if booking.master and booking.master.telegram_id == tm.chat_id:

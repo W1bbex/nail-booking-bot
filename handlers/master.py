@@ -12,6 +12,7 @@ from ui.dashboards import (
     client_master_declined_message,
     master_assigned_card,
     master_order_broadcast_card,
+    notification_booking_cancelled,
     notification_booking_confirmed,
 )
 from ui.keyboards import (
